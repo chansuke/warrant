@@ -10,7 +10,7 @@
 //! a goal that mentions one is reported `Unsupported` instead of failed and
 //! stays checked at run time.
 
-use crate::ast::{Expr, ExprKind, FnDecl, FnIdx, LambdaParam, Module};
+use crate::ast::{Expr, ExprId, ExprKind, FnDecl, FnIdx, LambdaParam, Module};
 use crate::builtin::Builtin;
 use crate::sexp::Pos;
 use crate::smt::{int_lit, quote_sym, sort, str_lit, vec_sort, I64_MIN, MAX_LEN, PRELUDE};
@@ -54,11 +54,34 @@ pub enum Goal {
     Unsupported(String),
 }
 
+/// Which part of the function being verified an obligation came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Site {
+    Body,
+    Requires(usize),
+    Ensures(usize),
+}
+
+/// Where an obligation is attached: the call or clause expression.
+#[derive(Clone, Copy)]
+struct Origin {
+    pos: Pos,
+    expr: ExprId,
+}
+
+impl Origin {
+    fn of(e: &Expr) -> Origin {
+        Origin { pos: e.at, expr: e.id }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Obligation {
     pub fn_name: String,
     pub kind: VcKind,
     pub at: Pos,
+    pub expr: ExprId,
+    pub site: Site,
     pub goal: Goal,
     /// SMT constants read back as a counterexample: the function's parameters.
     pub inputs: Vec<(String, Ty)>,
@@ -87,6 +110,7 @@ pub fn generate(m: &Module, ty: &TypeInfo) -> Vec<Obligation> {
             emit: true,
             approx: Vec::new(),
             inputs: Vec::new(),
+            site: Site::Body,
             clause_depth: 0,
         };
         x.function(d);
@@ -139,6 +163,7 @@ struct Exec<'a> {
     /// stand for.
     approx: Vec<(String, String)>,
     inputs: Vec<(String, Ty)>,
+    site: Site,
     clause_depth: usize,
 }
 
@@ -172,14 +197,14 @@ impl<'a> Exec<'a> {
         s
     }
 
-    fn obligation(&mut self, kind: VcKind, at: Pos, goal: Goal) {
+    fn obligation(&mut self, kind: VcKind, at: Origin, goal: Goal) {
         if self.emit {
             let inputs = self.inputs.clone();
-            self.out.push(Obligation { fn_name: self.fn_name.clone(), kind, at, goal, inputs });
+            self.out.push(Obligation { fn_name: self.fn_name.clone(), kind, at: at.pos, expr: at.expr, site: self.site, goal, inputs });
         }
     }
 
-    fn require(&mut self, kind: VcKind, at: Pos, goal: String) {
+    fn require(&mut self, kind: VcKind, at: Origin, goal: String) {
         if !self.emit {
             return;
         }
@@ -193,7 +218,7 @@ impl<'a> Exec<'a> {
         self.obligation(kind, at, g);
     }
 
-    fn require_value(&mut self, kind: VcKind, at: Pos, v: V<'a>) {
+    fn require_value(&mut self, kind: VcKind, at: Origin, v: V<'a>) {
         match v {
             V::T(t) => self.require(kind, at, t),
             _ => self.obligation(kind, at, Goal::Unsupported("a value has no SMT encoding in M1".into())),
@@ -288,16 +313,19 @@ impl<'a> Exec<'a> {
             };
             env.push((p.name.clone(), v));
         }
-        for c in &d.spec.requires {
+        for (index, c) in d.spec.requires.iter().enumerate() {
+            self.site = Site::Requires(index);
             if let V::T(t) = self.eval(&c.expr, &mut env) {
                 self.facts.push(t);
             }
         }
+        self.site = Site::Body;
         let result = self.eval_seq(&d.body, &mut env);
         env.push(("result".into(), result));
         for (index, c) in d.spec.ensures.iter().enumerate() {
+            self.site = Site::Ensures(index);
             let g = self.eval(&c.expr, &mut env);
-            self.require_value(VcKind::Ensures { index }, c.expr.at, g);
+            self.require_value(VcKind::Ensures { index }, Origin::of(&c.expr), g);
         }
     }
 
@@ -312,7 +340,7 @@ impl<'a> Exec<'a> {
         v
     }
 
-    fn call_global(&mut self, i: FnIdx, args: Vec<V<'a>>, at: Pos, check_requires: bool) -> V<'a> {
+    fn call_global(&mut self, i: FnIdx, args: Vec<V<'a>>, at: Origin, check_requires: bool) -> V<'a> {
         let d = &self.m.fns[i];
         let ret = Ty::from_type(&d.ret);
         if self.clause_depth > MAX_CLAUSE_DEPTH {
@@ -339,7 +367,7 @@ impl<'a> Exec<'a> {
     }
 
     /// Calls a function value. `fty` is its (resolved) function type.
-    fn apply(&mut self, f: V<'a>, args: Vec<V<'a>>, fty: &Ty, at: Pos) -> V<'a> {
+    fn apply(&mut self, f: V<'a>, args: Vec<V<'a>>, fty: &Ty, at: Origin) -> V<'a> {
         let (ps, ret) = fn_parts(fty);
         match f {
             V::F(FnV::Lambda(params, body, mut env)) => {
@@ -409,13 +437,13 @@ impl<'a> Exec<'a> {
                 match &f.kind {
                     ExprKind::Builtin(b) => {
                         let tys: Vec<Ty> = args.iter().map(|a| self.ty.of(a).clone()).collect();
-                        self.builtin(*b, vals, &tys, &t, e.at)
+                        self.builtin(*b, vals, &tys, &t, Origin::of(e))
                     }
-                    ExprKind::Global(i) => self.call_global(*i, vals, e.at, true),
+                    ExprKind::Global(i) => self.call_global(*i, vals, Origin::of(e), true),
                     _ => {
                         let fv = self.eval(f, env);
                         let fty = self.ty.of(f).clone();
-                        self.apply(fv, vals, &fty, e.at)
+                        self.apply(fv, vals, &fty, Origin::of(e))
                     }
                 }
             }
@@ -458,7 +486,7 @@ impl<'a> Exec<'a> {
         V::T(format!("(mk-{} {} {})", s, arr, vals.len()))
     }
 
-    fn builtin(&mut self, b: Builtin, args: Vec<V<'a>>, tys: &[Ty], ret: &Ty, at: Pos) -> V<'a> {
+    fn builtin(&mut self, b: Builtin, args: Vec<V<'a>>, tys: &[Ty], ret: &Ty, at: Origin) -> V<'a> {
         use Builtin as B;
         match b {
             B::Map | B::Filter | B::Fold | B::All => return self.higher_order(b, args, tys, ret, at),
@@ -567,7 +595,7 @@ impl<'a> Exec<'a> {
     /// to an arbitrary in-bounds element `k`, so obligations inside it hold
     /// for every element. A body that needs no fresh constants (no calls,
     /// no approximations) is inlined as a `lambda` or `forall` over `k`.
-    fn higher_order(&mut self, b: Builtin, mut args: Vec<V<'a>>, tys: &[Ty], ret: &Ty, at: Pos) -> V<'a> {
+    fn higher_order(&mut self, b: Builtin, mut args: Vec<V<'a>>, tys: &[Ty], ret: &Ty, at: Origin) -> V<'a> {
         let vec_ty = tys.last().expect("arity checked").clone();
         let V::T(v) = args.pop().expect("arity checked") else { return self.fresh_val(ret, b.name()) };
         let Some(s) = vs(&vec_ty) else { return self.fresh_val(ret, b.name()) };
@@ -709,5 +737,28 @@ mod tests {
                    (defn use [xs : (Vec i64)] -> Bool (:ensures result) (perm? (id xs) xs))";
         let Some(v) = verdicts(src) else { return };
         assert_eq!(v.iter().map(|x| x.2.as_str()).collect::<Vec<_>>(), ["unsupported", "unsupported"]);
+    }
+
+    #[test]
+    fn obligations_know_their_clause_and_call_site() {
+        let src = "(defn h [xs : (Vec i64)] -> i64 (:requires (> (get xs 0) 0)) (:ensures (> result (get xs 0))) (+ (get xs 0) 1))
+                   (defn g [] -> i64 (h [5]))";
+        let (f, s) = parse_all_spanned(src).unwrap();
+        let m = lower(&f, &s).unwrap();
+        let obs = generate(&m, &crate::types::check(&m).unwrap());
+        let sites: Vec<(String, Site)> = obs.iter().map(|o| (o.kind.to_sexp(), o.site)).collect();
+        assert_eq!(
+            sites,
+            [
+                ("bounds".into(), Site::Requires(0)),
+                ("bounds".into(), Site::Body),
+                ("overflow".into(), Site::Body),
+                ("bounds".into(), Site::Ensures(0)),
+                ("ensures :clause 0".into(), Site::Ensures(0)),
+                ("requires :callee h :clause 0".into(), Site::Body),
+            ]
+        );
+        let ExprKind::Call(..) = &m.fns[1].body[0].kind else { panic!() };
+        assert_eq!(obs[5].expr, m.fns[1].body[0].id);
     }
 }
