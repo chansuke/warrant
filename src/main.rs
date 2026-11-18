@@ -26,7 +26,7 @@ fn main() {
 
 const USAGE: &str = "usage: warrant <command> FILE [options]
   run   FILE [--report] [--no-contracts] [--no-typecheck]   run (defn main [] ...)
-  check FILE [--timeout-ms N]                             parse, load, type-check, prove contracts with z3
+  check FILE [--timeout-ms N] [--jobs N]                  parse, load, type-check, prove contracts with z3
   fmt   FILE [--to wisp|sexp]                             convert between canonical S-expr and the Wisp view
   bench FILE [-n N] [--no-contracts] [--no-typecheck]     time main N times; enforce (:budget (wall-ms N)) on main
 FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
@@ -191,14 +191,22 @@ fn real_main(args: Vec<String>) -> i32 {
                     return 2;
                 }
             };
+            let jobs = match opt_value(opts, "--jobs").map(str::parse::<usize>) {
+                None => std::thread::available_parallelism().map_or(1, |n| n.get()),
+                Some(Ok(n)) if n > 0 => n,
+                Some(_) => {
+                    println!("(error :kind usage :msg \"--jobs must be a positive integer\")");
+                    return 2;
+                }
+            };
             let mut vcs_failed = false;
             s += "\n  ";
             match (&typed, Z3::find(timeout_ms)) {
                 (Err(_), _) => s += "(smt :status skipped :reason \"type errors\")",
                 (Ok(_), None) => s += "(smt :status unavailable :reason \"z3 not found on PATH\")",
-                (Ok(info), Some(mut z3)) => {
+                (Ok(info), Some(z3)) => {
                     let t = Instant::now();
-                    let results = verify::discharge(vc::generate(&module, info), &mut z3);
+                    let results = verify::discharge(vc::generate(&module, info), &z3, jobs);
                     vcs_failed = verify::any_failed(&results);
                     s += &verify::summary_sexp(&results, t.elapsed().as_nanos());
                 }

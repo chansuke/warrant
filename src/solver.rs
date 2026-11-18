@@ -14,12 +14,15 @@ pub enum Outcome {
     Unknown { reason: String },
 }
 
-pub trait Solver {
-    /// Part of every cache key: a different solver may answer differently.
-    fn version(&self) -> &str;
+/// Solvers are shared across worker threads, one query per call.
+pub trait Solver: Sync {
+    /// Part of every cache key: the solver and every setting that can change
+    /// its answer, such as the timeout.
+    fn fingerprint(&self) -> String;
     /// `script` asserts the negated goal and ends without `(check-sat)`.
     /// `inputs` are the SMT constants to read back as a counterexample.
-    fn check(&mut self, script: &str, inputs: &[(String, Ty)]) -> Outcome;
+    /// `Err` means the solver could not be run at all.
+    fn check(&self, script: &str, inputs: &[(String, Ty)]) -> std::io::Result<Outcome>;
 }
 
 /// Elements of a vector shown in a counterexample.
@@ -160,12 +163,12 @@ impl Z3 {
 }
 
 impl Solver for Z3 {
-    fn version(&self) -> &str {
-        &self.version
+    fn fingerprint(&self) -> String {
+        format!("{} -t:{}", self.version, self.timeout_ms)
     }
 
-    fn check(&mut self, script: &str, inputs: &[(String, Ty)]) -> Outcome {
-        self.run(script, inputs).unwrap_or_else(|e| Outcome::Unknown { reason: format!("could not run z3: {}", e) })
+    fn check(&self, script: &str, inputs: &[(String, Ty)]) -> std::io::Result<Outcome> {
+        self.run(script, inputs)
     }
 }
 
@@ -183,15 +186,15 @@ mod tests {
 
     #[test]
     fn proves_valid_goals_and_returns_counterexamples() {
-        let Some(mut z) = z3() else { return };
-        assert_eq!(z.check("(declare-const x Int)\n(assert (not (= (+ x 0) x)))", &[]), Outcome::Proved);
-        let got = z.check("(declare-const |x| Int)\n(assert (not (> |x| -3)))\n(assert (= |x| -5))", &[("|x|".into(), Ty::I64)]);
+        let Some(z) = z3() else { return };
+        assert_eq!(z.check("(declare-const x Int)\n(assert (not (= (+ x 0) x)))", &[]).unwrap(), Outcome::Proved);
+        let got = z.check("(declare-const |x| Int)\n(assert (not (> |x| -3)))\n(assert (= |x| -5))", &[("|x|".into(), Ty::I64)]).unwrap();
         assert_eq!(got, Outcome::Failed { model: vec![("x".into(), "-5".into())] });
     }
 
     #[test]
     fn script_errors_are_unknown_not_proved() {
-        let Some(mut z) = z3() else { return };
-        assert!(matches!(z.check("(assert (not undefined-thing))", &[]), Outcome::Unknown { .. }));
+        let Some(z) = z3() else { return };
+        assert!(matches!(z.check("(assert (not undefined-thing))", &[]).unwrap(), Outcome::Unknown { .. }));
     }
 }

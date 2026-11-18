@@ -615,14 +615,14 @@ mod tests {
 
     /// `(fn kind outcome)` per obligation, in source order.
     fn verdicts(src: &str) -> Option<Vec<(String, String, String)>> {
-        let mut z = Z3::find(5000)?;
+        let z = Z3::find(5000)?;
         Some(
             obligations(src)
                 .into_iter()
                 .map(|o| {
                     let r = match &o.goal {
                         Goal::Unsupported(_) => "unsupported".to_string(),
-                        Goal::Script(s) => match z.check(s, &o.inputs) {
+                        Goal::Script(s) => match z.check(s, &o.inputs).unwrap() {
                             Outcome::Proved => "proved".into(),
                             Outcome::Failed { model } => format!("failed {}", counterexample_sexp(&model)),
                             Outcome::Unknown { reason } => format!("unknown {}", reason),
