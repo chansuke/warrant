@@ -37,6 +37,16 @@ impl SpanTree {
     pub fn leaf(line: usize, col: usize) -> Self {
         SpanTree { at: Pos { line, col }, kids: Vec::new() }
     }
+
+    /// Spans for a form built in memory rather than parsed: every position
+    /// is line 0, col 0.
+    pub fn synthetic(e: &Sexp) -> Self {
+        let kids = match e {
+            Sexp::List(v) | Sexp::Vector(v) => v.iter().map(SpanTree::synthetic).collect(),
+            _ => Vec::new(),
+        };
+        SpanTree { at: Pos { line: 0, col: 0 }, kids }
+    }
 }
 
 #[derive(Debug, Clone)]

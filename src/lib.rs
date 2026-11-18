@@ -13,6 +13,7 @@ pub mod profile;
 pub mod sexp;
 pub mod smt;
 pub mod solver;
+pub mod specdiff;
 pub mod types;
 pub mod vc;
 pub mod verify;
