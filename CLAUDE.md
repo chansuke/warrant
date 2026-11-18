@@ -24,6 +24,8 @@ target/release/warrant bench examples/msort.wrt -n 10
 | `src/ast.rs` | `lower`: defn と節の解析、名前解決、型注釈の解析。静的検査はすべてここの `Module` を読む |
 | `src/builtin.rs` | 組み込み関数の `enum Builtin` と名前の対応 |
 | `src/diag.rs` | 静的検査のエラー `Diag`（`:at` 付きの S式） |
+| `src/types.rs` | 静的な型検査（関数内の単相推論、組み込みの多相は使う箇所ごとに実体化） |
+| `src/effects.rs` | 静的なエフェクト検査（呼び出しグラフの不動点、関数値の潜在エフェクト） |
 | `src/eval.rs` | `Program::new`（`Module` から作る）、`Interp`（評価、契約、エフェクト、組み込み関数） |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |
 | `src/main.rs` | CLI。大きいスタックのスレッドで実行し、終了コードを返す |
