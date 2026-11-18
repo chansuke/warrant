@@ -1,10 +1,11 @@
-# Warrant (M0)
+# Warrant (M1)
 
 AIエージェントが実装を書き、人間は**仕様（法）だけ**を承認する言語。
 コードは「仕様を満たす根拠（warrant）」が揃ったときだけマージされる。
 
 - 設計判断と背景: [`docs/DESIGN.md`](docs/DESIGN.md)
-- 次の作業（M1）の引き継ぎ: [`docs/HANDOFF_M1.md`](docs/HANDOFF_M1.md)
+- M1 の設計: [`docs/M1_DESIGN.md`](docs/M1_DESIGN.md)（作業の指示は [`docs/HANDOFF_M1.md`](docs/HANDOFF_M1.md)）
+- 計測の記録: [`docs/BENCH.md`](docs/BENCH.md)
 - 開発ルール: [`CLAUDE.md`](CLAUDE.md)
 
 ## 設計の柱
@@ -76,9 +77,18 @@ warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 - [x] エフェクトの推移的な動的検査（`print` = `io`）
 - [x] プロファイラ（関数別の包括時間、確保量、契約コスト）とベンチ（性能予算）
 
+## M1 の範囲
+
+- [x] ソース位置（`SpanTree`）。ロード・型・エフェクト・VC のエラーに `:at (line L col C)`
+- [x] 静的な型検査（関数内の単相推論）と静的なエフェクト検査（クロージャ経由も追う）
+- [x] VC 生成と Z3（オーバーフロー、0 除算、境界、呼び出し先の requires、自分の ensures、反例）
+- [x] VC 単位の証明キャッシュと並列の証明
+- [x] `--contracts auto`（証明済みの節は実行時に検査しない）
+- [x] `spec-diff`（仕様の弱体化の検出、精緻化の SMT 証明）
+
 ## ロードマップ
 
-- **M1**: 型・エフェクト検査を静的に／`:ensures` から VC 生成 → Z3／定義ハッシュによる証明キャッシュ／仕様差分の権限分離
+- **M1（完了）**: 型・エフェクト検査を静的に／`:ensures` から VC 生成 → Z3／証明キャッシュ／仕様差分の権限分離
 - **M2**: 独自ランタイム（Perceus 風 RC ＋ work-stealing fork-join）／純粋関数の自動並列化／1コア対 Nコアの並列効率をレポート
 - **M3**: 人間が仕様だけを書き、エージェントがマージソートを実装 → 証明 → ベンチ → マージまでループを完結
 
