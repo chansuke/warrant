@@ -13,6 +13,7 @@ target/release/warrant run   examples/msort.wrt --report
 target/release/warrant check examples/msort.wrt            # z3 が PATH にあれば契約を証明する
 target/release/warrant fmt   examples/msort.wrt            # → Wisp 表示
 target/release/warrant bench examples/msort.wrt -n 10      # 既定は --contracts auto
+target/release/warrant spec-diff OLD.wrt NEW.wrt           # 仕様の弱体化があれば終了コード 1
 ```
 
 ## コード構成
@@ -31,6 +32,7 @@ target/release/warrant bench examples/msort.wrt -n 10      # 既定は --contrac
 | `src/solver.rs` | `trait Solver` と `Z3`（`z3 -in` のサブプロセス、`get-value` で反例を読む） |
 | `src/verify.rs` | VC を並列にソルバに渡し（キャッシュ経由）、`(smt ...)` の集計を作る |
 | `src/contracts.rs` | 節ごとの検証レベル（proved / runtime-checked）と、モードから実行時に検査する節を決める `Checks` |
+| `src/specdiff.rs` | 仕様差分ガード。節ごとの変更と判定（weakened / strengthened / refined / new）、精緻化の SMT 証明 |
 | `src/cache.rs` | VC 単位の証明キャッシュ（`.warrant/cache/`、キーはソルバの fingerprint とスクリプト） |
 | `src/eval.rs` | `Program::new`（`Module` から作る）、`Interp`（評価、契約、エフェクト、組み込み関数） |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |

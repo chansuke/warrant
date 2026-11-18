@@ -51,6 +51,7 @@ AIエージェントが主に実装を書き、**人間はボトルネックに�
 | D19 | `=` は同じ型の値どうしだけを比較でき、関数どうしの比較は型エラー | M0 は関数どうしなら常に false を返していた。意味のない比較を型で拒否する。2026-11-19 ユーザー確認済み |
 | D20 | `--no-typecheck` は型検査だけを省略し、静的なエフェクト検査は `run` / `bench` の前に必ず行う | エフェクトは権限と安全性の仕組み（D4）で、型の都合で外せないほうがよい。検査は 0.02 ms 程度で、省略する理由がない |
 | D21 | SMT ではベクタの長さを `0 <= len <= 2^59` と仮定する | インタプリタは `isize::MAX` バイトを超えて `Value`（24 バイト）を確保できないので、実際の上限は約 3.8×10^17。長さ2つの和が i64 に収まり、`(+ (len a) (len b))` のオーバーフローを証明できる。上限が実装と矛盾しないことを `eval.rs` のテストで確かめる |
+| D22 | spec-diff の精緻化の証明は、古い契約を持ち新しい関数を呼ぶだけの合成関数 `%refines-f` を VC 生成器にかけて行う | 呼び出しの requires の VC が「古い requires ⇒ 新しい requires」、ensures の VC が「古い requires ∧ 新しい ensures ⇒ 古い ensures」になる。SMT の符号化を2つ持たずに済む。節が呼ぶ補助関数は新しい版で解決する（補助関数の契約も変わった場合は近似） |
 
 ## 4. 言語（M0 時点）
 
@@ -87,6 +88,7 @@ warrant run   FILE [--report] [--contracts auto|runtime|off] [--no-typecheck]
 warrant check FILE
 warrant fmt   FILE [--to wisp|sexp]
 warrant bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck]
+warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 証明のオプション（check と、--contracts auto の run / bench）: --timeout-ms N --jobs N --cache-dir D --no-cache
 ```
 
@@ -95,6 +97,8 @@ warrant bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck]
 `check` は型検査が通れば VC を生成して Z3 で証明する。出力は `(smt :status ok|failed :vcs N :proved P :failed F :unknown U :unsupported X :ms T :issues (...))` で、証明できなかった VC を `(vc :fn F :kind K :at (line L col C) :status failed :counterexample (xs [...]))` の形で列挙する。VC は `--jobs` 個（既定は論理コア数）の z3 を並列に動かして解く。結果は VC ごとに `.warrant/cache/` にキャッシュし、`:cached C` と、今回ソルバにかけた関数 `:reproved (...)`、遅い順の3件 `:slowest ((fn kind ms) ...)` を出す。VC が1つでも failed なら終了コード 1。unknown（タイムアウト、既定 2 秒）と unsupported（`perm?` など）は失敗にしない。z3 が無ければ `(smt :status unavailable ...)`。再帰する関数は `:termination assumed`（停止性は証明しない）
 
 `run` と `bench` の既定は `--contracts auto`。実行前に VC を証明し（キャッシュ経由）、証明できた節は実行時に検査しない。`ensures` の節は、節そのものと節の式の境界・オーバーフローの VC がすべて proved なら省く。`requires` の節は、すべての呼び出し箇所で VC が proved なら省く。値として渡される関数と `main` の `requires` は常に検査する。`--no-contracts` は `--contracts off` と同じ。出力は `(contracts auto :checked 2 :erased 12 :verify-ms 1.3)`。`check` の関数ごとの行は `:level proved|runtime-checked|unspecified :clauses (requires [...] ensures [...])`
+
+`spec-diff` は2つの版を節ごとに比べる（M1-7）。`:ensures` の削除・変更、`:requires` の追加・変更、`:effects` の拡大・削除、`:budget` の緩和・削除、型シグネチャの変更、関数の削除を `:verdict weakened` とし、1つでもあれば終了コード 1。本体だけの変更は `(impl (f :body changed))` に別に出す（エージェントだけでマージしてよい範囲）。z3 があれば、ensures / requires の変更について「古い requires ⇒ 新しい requires」と「古い requires ∧ 新しい ensures ⇒ 古い ensures」を証明し、示せた変更は `refined` として弱体化から外す（`--no-smt` で省略）
 
 `run` と `bench` は実行前に型検査とエフェクト検査を行い、エラーがあれば実行せず終了コード 1 で終わる。`--no-typecheck` で省略できるのは型検査だけで、エフェクト検査は省略できない（D20）。未定義シンボルと型注釈の欠落はロードの段階で拒否され、終了コード 2
 

@@ -37,6 +37,7 @@ warrant run   FILE [--report] [--contracts auto|runtime|off] [--no-typecheck]
 warrant check FILE
 warrant fmt   FILE [--to wisp|sexp]
 warrant bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck]
+warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 ```
 
 終了コード: `0` 成功 / `1` 実行時・契約・エフェクト違反 / `2` 構文・ロード / `3` 性能予算超過
