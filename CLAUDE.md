@@ -12,7 +12,7 @@ cargo clippy --release            # 警告ゼロを維持
 target/release/warrant run   examples/msort.wrt --report
 target/release/warrant check examples/msort.wrt            # z3 が PATH にあれば契約を証明する
 target/release/warrant fmt   examples/msort.wrt            # → Wisp 表示
-target/release/warrant bench examples/msort.wrt -n 10
+target/release/warrant bench examples/msort.wrt -n 10      # 既定は --contracts auto
 ```
 
 ## コード構成
@@ -30,6 +30,7 @@ target/release/warrant bench examples/msort.wrt -n 10
 | `src/vc.rs` | 記号実行による VC 生成。1つの `Obligation` が1つの完結したスクリプト |
 | `src/solver.rs` | `trait Solver` と `Z3`（`z3 -in` のサブプロセス、`get-value` で反例を読む） |
 | `src/verify.rs` | VC を並列にソルバに渡し（キャッシュ経由）、`(smt ...)` の集計を作る |
+| `src/contracts.rs` | 節ごとの検証レベル（proved / runtime-checked）と、モードから実行時に検査する節を決める `Checks` |
 | `src/cache.rs` | VC 単位の証明キャッシュ（`.warrant/cache/`、キーはソルバの fingerprint とスクリプト） |
 | `src/eval.rs` | `Program::new`（`Module` から作る）、`Interp`（評価、契約、エフェクト、組み込み関数） |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |

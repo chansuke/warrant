@@ -83,15 +83,18 @@ AIエージェントが主に実装を書き、**人間はボトルネックに�
 ## 5. CLI と終了コード
 
 ```
-warrant run   FILE [--report] [--no-contracts] [--no-typecheck]
-warrant check FILE [--timeout-ms N] [--jobs N] [--cache-dir D] [--no-cache]
+warrant run   FILE [--report] [--contracts auto|runtime|off] [--no-typecheck]
+warrant check FILE
 warrant fmt   FILE [--to wisp|sexp]
-warrant bench FILE [-n N] [--no-contracts] [--no-typecheck]
+warrant bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck]
+証明のオプション（check と、--contracts auto の run / bench）: --timeout-ms N --jobs N --cache-dir D --no-cache
 ```
 
 `0` 成功 / `1` 実行時・契約・エフェクト違反、check 失敗 / `2` 構文・ロード・使い方 / `3` 性能予算超過
 
 `check` は型検査が通れば VC を生成して Z3 で証明する。出力は `(smt :status ok|failed :vcs N :proved P :failed F :unknown U :unsupported X :ms T :issues (...))` で、証明できなかった VC を `(vc :fn F :kind K :at (line L col C) :status failed :counterexample (xs [...]))` の形で列挙する。VC は `--jobs` 個（既定は論理コア数）の z3 を並列に動かして解く。結果は VC ごとに `.warrant/cache/` にキャッシュし、`:cached C` と、今回ソルバにかけた関数 `:reproved (...)`、遅い順の3件 `:slowest ((fn kind ms) ...)` を出す。VC が1つでも failed なら終了コード 1。unknown（タイムアウト、既定 2 秒）と unsupported（`perm?` など）は失敗にしない。z3 が無ければ `(smt :status unavailable ...)`。再帰する関数は `:termination assumed`（停止性は証明しない）
+
+`run` と `bench` の既定は `--contracts auto`。実行前に VC を証明し（キャッシュ経由）、証明できた節は実行時に検査しない。`ensures` の節は、節そのものと節の式の境界・オーバーフローの VC がすべて proved なら省く。`requires` の節は、すべての呼び出し箇所で VC が proved なら省く。値として渡される関数と `main` の `requires` は常に検査する。`--no-contracts` は `--contracts off` と同じ。出力は `(contracts auto :checked 2 :erased 12 :verify-ms 1.3)`。`check` の関数ごとの行は `:level proved|runtime-checked|unspecified :clauses (requires [...] ensures [...])`
 
 `run` と `bench` は実行前に型検査とエフェクト検査を行い、エラーがあれば実行せず終了コード 1 で終わる。`--no-typecheck` で省略できるのは型検査だけで、エフェクト検査は省略できない（D20）。未定義シンボルと型注釈の欠落はロードの段階で拒否され、終了コード 2
 

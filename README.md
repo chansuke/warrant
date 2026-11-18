@@ -33,10 +33,10 @@ M1 以降、節の変更は別権限とし、`ensures` の削除・弱体化（�
 ## CLI
 
 ```
-warrant run   FILE [--report] [--no-contracts] [--no-typecheck]
+warrant run   FILE [--report] [--contracts auto|runtime|off] [--no-typecheck]
 warrant check FILE
 warrant fmt   FILE [--to wisp|sexp]
-warrant bench FILE [-n N] [--no-contracts] [--no-typecheck]
+warrant bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck]
 ```
 
 終了コード: `0` 成功 / `1` 実行時・契約・エフェクト違反 / `2` 構文・ロード / `3` 性能予算超過
