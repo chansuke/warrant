@@ -1,13 +1,15 @@
 //! M0 reference interpreter.
 //!
-//! Contracts (`:requires` / `:ensures`) are checked at run time here; in M1 they
-//! become SMT proof obligations and the runtime checks can be erased.
+//! Contracts (`:requires` / `:ensures`) are checked at run time here, except
+//! the clauses `contracts::Checks` says were proved: `Program::new` leaves
+//! those out, so an erased clause costs nothing per call.
 //! Effects (`:effects [...]`) are checked dynamically and transitively: a
 //! function that declares `[]` may not reach `print` (effect `io`) through any
 //! callee or closure. Functions with no `:effects` clause are unchecked in M0.
 //! Integer arithmetic is checked: overflow is an error, never a wrap.
 
-use crate::ast::{Budget, Module};
+use crate::ast::{Budget, Clause, Module};
+use crate::contracts::Checks;
 use crate::builtin::Builtin;
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str, Sexp};
@@ -121,17 +123,18 @@ pub fn parse_params(v: &[Sexp]) -> R<Vec<String>> {
 }
 
 impl Program {
-    pub fn new(m: &Module) -> Program {
-        let src = |cs: &[crate::ast::Clause]| cs.iter().map(|c| c.src.clone()).collect();
+    pub fn new(m: &Module, checks: &Checks) -> Program {
+        let kept = |cs: &[Clause], keep: &[bool]| cs.iter().zip(keep).filter(|(_, k)| **k).map(|(c, _)| c.src.clone()).collect();
         let fns = m
             .fns
             .iter()
-            .map(|d| {
+            .enumerate()
+            .map(|(i, d)| {
                 let def = FnDef {
                     name: d.name.clone(),
                     params: d.params.iter().map(|p| p.name.clone()).collect(),
-                    requires: src(&d.spec.requires),
-                    ensures: src(&d.spec.ensures),
+                    requires: kept(&d.spec.requires, &checks.requires[i]),
+                    ensures: kept(&d.spec.ensures, &checks.ensures[i]),
                     effects: d.spec.effects.as_ref().map(|es| es.iter().cloned().collect()),
                     budget: d.spec.budget.clone(),
                     body: d.body_src.clone(),
@@ -199,14 +202,13 @@ fn arity(op: &str, args: &[Value], n: usize) -> R<()> {
 pub struct Interp<'p> {
     prog: &'p Program,
     pub prof: Profiler,
-    pub contracts: bool,
     effect_stack: Vec<Rc<FnDef>>,
     depth: usize,
 }
 
 impl<'p> Interp<'p> {
-    pub fn new(prog: &'p Program, contracts: bool, profile: bool) -> Self {
-        Interp { prog, prof: Profiler::new(profile), contracts, effect_stack: Vec::new(), depth: 0 }
+    pub fn new(prog: &'p Program, profile: bool) -> Self {
+        Interp { prog, prof: Profiler::new(profile), effect_stack: Vec::new(), depth: 0 }
     }
 
     pub fn call_main(&mut self) -> R<Value> {
@@ -377,13 +379,11 @@ impl<'p> Interp<'p> {
     }
 
     fn call_body(&mut self, def: &FnDef, env: &Env) -> R<Value> {
-        if self.contracts {
-            for r in &def.requires {
-                self.check_contract(def, "requires", r, env)?;
-            }
+        for r in &def.requires {
+            self.check_contract(def, "requires", r, env)?;
         }
         let v = self.eval_seq(&def.body, env)?;
-        if self.contracts && !def.ensures.is_empty() {
+        if !def.ensures.is_empty() {
             let env2 = env.bind("result".into(), v.clone());
             for en in &def.ensures {
                 self.check_contract(def, "ensures", en, &env2)?;

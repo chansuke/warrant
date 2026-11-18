@@ -72,7 +72,8 @@ pub fn ms(ns: u128) -> String {
 
 pub struct RunInfo {
     pub wall_ns: u128,
-    pub contracts: bool,
+    /// `runtime`, `auto` or `off`.
+    pub contracts: &'static str,
     /// `None` when run with `--no-typecheck`.
     pub types_ns: Option<u128>,
 }
@@ -88,7 +89,7 @@ pub fn report(file: &str, status: &str, parse_ns: u128, run: &RunInfo, p: &Profi
     s += &format!(
         "  (run (wall-ms {}) (contracts {})\n       (calls {}) (closure-calls {}) (builtin-calls {}) (max-depth {})\n       (vec-allocs {}) (vec-elems {}) (contract-checks {}) (contract-ms {}))\n",
         ms(run.wall_ns),
-        if run.contracts { "runtime" } else { "off" },
+        run.contracts,
         p.calls,
         p.closure_calls,
         p.builtin_calls,

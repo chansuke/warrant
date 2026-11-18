@@ -9,6 +9,7 @@ use warrant::ast::{self, Module};
 use warrant::diag::Diag;
 use warrant::cache::Cache;
 use warrant::solver::Z3;
+use warrant::contracts::{Checks, Mode};
 use warrant::{effects, types, vc, verify};
 use warrant::eval::{self, Interp, Program};
 use warrant::profile::{self, ms, RunInfo};
@@ -126,9 +127,10 @@ fn real_main(args: Vec<String>) -> i32 {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            let prog = Program::new(&module);
-            let (report, contracts) = (has("--report"), !has("--no-contracts"));
-            let mut it = Interp::new(&prog, contracts, report);
+            let mode = if has("--no-contracts") { Mode::Off } else { Mode::Runtime };
+            let prog = Program::new(&module, &Checks::new(&module, mode, None));
+            let (report, contracts) = (has("--report"), mode.name());
+            let mut it = Interp::new(&prog, report);
             let t = Instant::now();
             let r = it.call_main();
             let wall_ns = t.elapsed().as_nanos();
@@ -238,7 +240,8 @@ fn real_main(args: Vec<String>) -> i32 {
             if let Err(c) = check_before_running(&module, has("--no-typecheck")) {
                 return c;
             }
-            let prog = Program::new(&module);
+            let mode = if has("--no-contracts") { Mode::Off } else { Mode::Runtime };
+            let prog = Program::new(&module, &Checks::new(&module, mode, None));
             let n: usize = match opt_value(opts, "-n").map(str::parse).unwrap_or(Ok(10)) {
                 Ok(n) if n > 0 => n,
                 _ => {
@@ -246,10 +249,9 @@ fn real_main(args: Vec<String>) -> i32 {
                     return 2;
                 }
             };
-            let contracts = !has("--no-contracts");
             let mut times = Vec::with_capacity(n);
             for i in 0..=n {
-                let mut it = Interp::new(&prog, contracts, false);
+                let mut it = Interp::new(&prog, false);
                 let t = Instant::now();
                 if let Err(e) = it.call_main() {
                     println!("{}", e.to_sexp());
@@ -266,7 +268,7 @@ fn real_main(args: Vec<String>) -> i32 {
                 "(bench\n  (file {})\n  (n {}) (contracts {})\n  (wall-ms :min {} :median {} :mean {} :max {})",
                 quote_str(path),
                 n,
-                if contracts { "runtime" } else { "off" },
+                mode.name(),
                 ms(times[0]),
                 ms(median),
                 ms(mean),

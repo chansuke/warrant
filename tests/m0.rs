@@ -1,4 +1,5 @@
 use warrant::ast::lower;
+use warrant::contracts::{Checks, Mode};
 use warrant::eval::{show, Interp, Program};
 use warrant::sexp::{parse_all, parse_all_spanned, pretty_all};
 use warrant::wisp;
@@ -28,8 +29,9 @@ fn run(src: &str) -> Result<String, (String, String)> {
         .stack_size(1 << 30)
         .spawn(move || {
             let (forms, spans) = parse_all_spanned(&src).unwrap();
-            let prog = Program::new(&lower(&forms, &spans).unwrap());
-            let mut it = Interp::new(&prog, true, true);
+            let m = lower(&forms, &spans).unwrap();
+            let prog = Program::new(&m, &Checks::new(&m, Mode::Runtime, None));
+            let mut it = Interp::new(&prog, true);
             it.call_main().map(|v| show(&v)).map_err(|e| (e.kind.to_string(), e.msg))
         })
         .unwrap()
