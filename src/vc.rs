@@ -26,6 +26,16 @@ pub enum VcKind {
 }
 
 impl VcKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            VcKind::Requires { .. } => "requires",
+            VcKind::Ensures { .. } => "ensures",
+            VcKind::Overflow => "overflow",
+            VcKind::DivZero => "div-zero",
+            VcKind::Bounds => "bounds",
+        }
+    }
+
     pub fn to_sexp(&self) -> String {
         match self {
             VcKind::Requires { callee, index } => format!("requires :callee {} :clause {}", callee, index),

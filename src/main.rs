@@ -7,6 +7,7 @@
 use std::time::Instant;
 use warrant::ast::{self, Module};
 use warrant::diag::Diag;
+use warrant::cache::Cache;
 use warrant::solver::Z3;
 use warrant::{effects, types, vc, verify};
 use warrant::eval::{self, Interp, Program};
@@ -26,7 +27,8 @@ fn main() {
 
 const USAGE: &str = "usage: warrant <command> FILE [options]
   run   FILE [--report] [--no-contracts] [--no-typecheck]   run (defn main [] ...)
-  check FILE [--timeout-ms N] [--jobs N]                  parse, load, type-check, prove contracts with z3
+  check FILE [--timeout-ms N] [--jobs N] [--cache-dir D] [--no-cache]
+                                                          parse, load, type-check, prove contracts with z3
   fmt   FILE [--to wisp|sexp]                             convert between canonical S-expr and the Wisp view
   bench FILE [-n N] [--no-contracts] [--no-typecheck]     time main N times; enforce (:budget (wall-ms N)) on main
 FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
@@ -206,7 +208,8 @@ fn real_main(args: Vec<String>) -> i32 {
                 (Ok(_), None) => s += "(smt :status unavailable :reason \"z3 not found on PATH\")",
                 (Ok(info), Some(z3)) => {
                     let t = Instant::now();
-                    let results = verify::discharge(vc::generate(&module, info), &z3, jobs);
+                    let cache = (!has("--no-cache")).then(|| Cache::new(opt_value(opts, "--cache-dir").unwrap_or(".warrant/cache")));
+                    let results = verify::discharge(vc::generate(&module, info), &z3, cache.as_ref(), jobs);
                     vcs_failed = verify::any_failed(&results);
                     s += &verify::summary_sexp(&results, t.elapsed().as_nanos());
                 }

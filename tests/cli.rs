@@ -93,3 +93,36 @@ fn msort_proves_everything_but_perm() {
     assert_eq!(o.stdout.matches("depends on perm?").count(), 2, "{}", o.stdout);
     assert!(o.stdout.contains("(merge :effects [] :inferred [] :requires 2 :ensures 4 :level runtime-checked :termination assumed)"), "{}", o.stdout);
 }
+
+/// The `(smt ...)` line's `:cached` count and `:reproved` list.
+fn smt_cache_line(out: &str) -> (usize, String) {
+    let line = out.lines().find(|l| l.trim_start().starts_with("(smt")).unwrap_or_else(|| panic!("{}", out));
+    let cached = line.split(":cached ").nth(1).and_then(|r| r.split(' ').next()).unwrap().parse().unwrap();
+    let reproved = line.split(":reproved (").nth(1).and_then(|r| r.split(')').next()).unwrap().to_string();
+    (cached, reproved)
+}
+
+#[test]
+fn cache_reproves_only_what_an_edit_can_affect() {
+    if !have_z3() {
+        return;
+    }
+    let base = std::fs::read_to_string("examples/msort.wrt").unwrap();
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("cache-{}", std::process::id()));
+    let cache = dir.to_string_lossy().into_owned();
+    let check = |name: &str, src: &str| {
+        let o = warrant(&["check", &source(name, src), "--cache-dir", &cache]);
+        assert_eq!(o.code, 0, "{}", o.stdout);
+        smt_cache_line(&o.stdout)
+    };
+    assert_eq!(check("c0.wrt", &base), (0, "gen main merge msort".into()));
+    assert_eq!(check("c1.wrt", &base), (37, "".into()));
+
+    let body_edit = base.replace("(* i 7919)", "(* i 7917)");
+    let (_, reproved) = check("c2.wrt", &body_edit);
+    assert_eq!(reproved, "gen", "a body edit re-proves only that function");
+
+    let contract_edit = base.replace("(:ensures (= (len result) n))", "(:ensures (>= (len result) n) (<= (len result) n))");
+    let (_, reproved) = check("c3.wrt", &contract_edit);
+    assert_eq!(reproved, "gen main", "a contract edit also re-proves the callers");
+}
