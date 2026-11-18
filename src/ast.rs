@@ -48,6 +48,21 @@ pub struct Expr {
     pub kind: ExprKind,
 }
 
+impl Expr {
+    pub fn children(&self) -> Vec<&Expr> {
+        match &self.kind {
+            ExprKind::VecLit(v) | ExprKind::Do(v) | ExprKind::And(v) | ExprKind::Or(v) => v.iter().collect(),
+            ExprKind::If(c, t, f) => vec![c, t, f],
+            ExprKind::Let(bs, body) => bs.iter().map(|(_, e)| e).chain(body).collect(),
+            ExprKind::Lambda(_, body) => body.iter().collect(),
+            ExprKind::Call(f, args) => std::iter::once(&**f).chain(args).collect(),
+            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Local(_) | ExprKind::Global(_) | ExprKind::Builtin(_) => {
+                Vec::new()
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum ExprKind {
     Int(i64),
@@ -122,9 +137,52 @@ pub struct Module {
     pub n_exprs: usize,
 }
 
+impl FnDecl {
+    /// Body and clauses.
+    pub fn exprs(&self) -> impl Iterator<Item = &Expr> {
+        self.spec.requires.iter().chain(&self.spec.ensures).map(|c| &c.expr).chain(&self.body)
+    }
+
+    /// Top-level functions this one refers to, called or passed as values.
+    pub fn callees(&self) -> Vec<FnIdx> {
+        let mut out = Vec::new();
+        let mut stack: Vec<&Expr> = self.exprs().collect();
+        while let Some(e) = stack.pop() {
+            if let ExprKind::Global(i) = e.kind {
+                out.push(i);
+            }
+            stack.extend(e.children());
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+}
+
 impl Module {
     pub fn get(&self, name: &str) -> Option<&FnDecl> {
         self.index.get(name).map(|&i| &self.fns[i])
+    }
+
+    /// Whether each function can reach itself through the call graph. Their
+    /// termination is assumed, not proved, in M1.
+    pub fn recursive(&self) -> Vec<bool> {
+        let edges: Vec<Vec<FnIdx>> = self.fns.iter().map(FnDecl::callees).collect();
+        (0..self.fns.len())
+            .map(|start| {
+                let mut seen = vec![false; self.fns.len()];
+                let mut stack = edges[start].clone();
+                while let Some(i) = stack.pop() {
+                    if i == start {
+                        return true;
+                    }
+                    if !std::mem::replace(&mut seen[i], true) {
+                        stack.extend(&edges[i]);
+                    }
+                }
+                false
+            })
+            .collect()
     }
 }
 
@@ -445,6 +503,18 @@ mod tests {
         assert_eq!(err_at("(defn f [x] -> i64 x)"), ("type", 1, 10));
         assert_eq!(err_at("(defn f [x : i64] x)"), ("type", 1, 7));
         assert_eq!(err_at("(defn f [x : int] -> i64 x)"), ("type", 1, 14));
+    }
+
+    #[test]
+    fn finds_direct_and_mutual_recursion() {
+        let m = lower_src(
+            "(defn even [n : i64] -> Bool (if (= n 0) true (odd (- n 1))))
+             (defn odd [n : i64] -> Bool (if (= n 0) false (even (- n 1))))
+             (defn fact [n : i64] -> i64 (if (= n 0) 1 (* n (fact (- n 1)))))
+             (defn main [] -> Bool (even 4))",
+        )
+        .unwrap();
+        assert_eq!(m.recursive(), [true, true, true, false]);
     }
 
     #[test]

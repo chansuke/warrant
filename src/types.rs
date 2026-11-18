@@ -234,22 +234,9 @@ impl Infer<'_> {
             if e.id == id {
                 return Some(e.at);
             }
-            let kids: Vec<&Expr> = match &e.kind {
-                ExprKind::VecLit(v) | ExprKind::Do(v) | ExprKind::And(v) | ExprKind::Or(v) => v.iter().collect(),
-                ExprKind::If(c, t, f) => vec![c, t, f],
-                ExprKind::Let(bs, body) => bs.iter().map(|(_, e)| e).chain(body).collect(),
-                ExprKind::Lambda(_, body) => body.iter().collect(),
-                ExprKind::Call(f, args) => std::iter::once(&**f).chain(args).collect(),
-                _ => Vec::new(),
-            };
-            kids.into_iter().find_map(|k| find(k, id))
+            e.children().into_iter().find_map(|k| find(k, id))
         }
-        self.m
-            .fns
-            .iter()
-            .flat_map(|d| d.spec.requires.iter().chain(&d.spec.ensures).map(|c| &c.expr).chain(&d.body))
-            .find_map(|e| find(e, id))
-            .expect("visited ids come from the module")
+        self.m.fns.iter().flat_map(FnDecl::exprs).find_map(|e| find(e, id)).expect("visited ids come from the module")
     }
 
     fn shape(&mut self, b: Builtin) -> Shape {
