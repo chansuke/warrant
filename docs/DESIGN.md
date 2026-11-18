@@ -80,13 +80,15 @@ AIエージェントが主に実装を書き、**人間はボトルネックに�
 ## 5. CLI と終了コード
 
 ```
-warrant run   FILE [--report] [--no-contracts]
+warrant run   FILE [--report] [--no-contracts] [--no-typecheck]
 warrant check FILE
 warrant fmt   FILE [--to wisp|sexp]
-warrant bench FILE [-n N] [--no-contracts]
+warrant bench FILE [-n N] [--no-contracts] [--no-typecheck]
 ```
 
 `0` 成功 / `1` 実行時・契約・エフェクト違反、check 失敗 / `2` 構文・ロード・使い方 / `3` 性能予算超過
+
+`run` と `bench` は実行前に型検査を行い、型エラーがあれば実行せず終了コード 1 で終わる（`--no-typecheck` で省略）。未定義シンボルと型注釈の欠落はロードの段階で拒否され、終了コード 2
 
 エラーの kind: `parse syntax load unbound type arity bounds overflow div-zero contract effect stack io usage`
 
