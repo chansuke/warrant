@@ -5,7 +5,8 @@
 //! 2 parse/load/usage error, 3 performance budget exceeded.
 
 use std::time::Instant;
-use warrant::ast;
+use warrant::ast::{self, Module};
+use warrant::types;
 use warrant::eval::{self, Interp, Program};
 use warrant::profile::{self, ms, RunInfo};
 use warrant::sexp::{self, quote_str, Sexp, SpanTree};
@@ -22,10 +23,10 @@ fn main() {
 }
 
 const USAGE: &str = "usage: warrant <command> FILE [options]
-  run   FILE [--report] [--no-contracts]   run (defn main [] ...)
-  check FILE                               parse, load, view round-trip, list verification levels
-  fmt   FILE [--to wisp|sexp]              convert between canonical S-expr and the Wisp view
-  bench FILE [-n N] [--no-contracts]       time main N times; enforce (:budget (wall-ms N)) on main
+  run   FILE [--report] [--no-contracts] [--no-typecheck]   run (defn main [] ...)
+  check FILE                                              parse, load, type-check, list verification levels
+  fmt   FILE [--to wisp|sexp]                             convert between canonical S-expr and the Wisp view
+  bench FILE [-n N] [--no-contracts] [--no-typecheck]     time main N times; enforce (:budget (wall-ms N)) on main
 FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
 
 fn opt_value<'a>(opts: &'a [String], key: &str) -> Option<&'a str> {
@@ -58,12 +59,26 @@ fn read_forms(path: &str) -> Result<Source, i32> {
     }
 }
 
-fn load(src: &Source) -> Result<Program, i32> {
-    match ast::lower(&src.forms, &src.spans) {
-        Ok(m) => Ok(Program::new(&m)),
-        Err(d) => {
-            println!("{}", d.to_sexp());
-            Err(2)
+fn load(src: &Source) -> Result<Module, i32> {
+    ast::lower(&src.forms, &src.spans).map_err(|d| {
+        println!("{}", d.to_sexp());
+        2
+    })
+}
+
+/// Type-checks unless `--no-typecheck`. Returns the time taken, or `None` when skipped.
+fn typecheck_before_running(m: &Module, skip: bool) -> Result<Option<u128>, i32> {
+    if skip {
+        return Ok(None);
+    }
+    let t = Instant::now();
+    match types::check(m) {
+        Ok(_) => Ok(Some(t.elapsed().as_nanos())),
+        Err(errors) => {
+            for d in errors {
+                println!("{}", d.to_sexp());
+            }
+            Err(1)
         }
     }
 }
@@ -82,10 +97,15 @@ fn real_main(args: Vec<String>) -> i32 {
     let (forms, parse_ns) = (&src.forms, src.parse_ns);
     match cmd {
         "run" => {
-            let prog = match load(&src) {
-                Ok(p) => p,
+            let module = match load(&src) {
+                Ok(m) => m,
                 Err(c) => return c,
             };
+            let types_ns = match typecheck_before_running(&module, has("--no-typecheck")) {
+                Ok(t) => t,
+                Err(c) => return c,
+            };
+            let prog = Program::new(&module);
             let (report, contracts) = (has("--report"), !has("--no-contracts"));
             let mut it = Interp::new(&prog, contracts, report);
             let t = Instant::now();
@@ -103,15 +123,16 @@ fn real_main(args: Vec<String>) -> i32 {
             };
             if report {
                 let status = if code == 0 { "ok" } else { "error" };
-                println!("{}", profile::report(path, status, parse_ns, &RunInfo { wall_ns, contracts }, &it.prof));
+                println!("{}", profile::report(path, status, parse_ns, &RunInfo { wall_ns, contracts, types_ns }, &it.prof));
             }
             code
         }
         "check" => {
-            let prog = match load(&src) {
-                Ok(p) => p,
+            let module = match load(&src) {
+                Ok(m) => m,
                 Err(c) => return c,
             };
+            let prog = Program::new(&module);
             let view = wisp::print_all(forms);
             let roundtrip_ok = matches!(wisp::parse(&view), Ok(back) if back == *forms);
             let mut s = format!(
@@ -136,9 +157,23 @@ fn real_main(args: Vec<String>) -> i32 {
                     level
                 );
             }
-            s += ")\n  (types :status skipped :until M1)\n  (smt :status skipped :until M1))";
+            let t = Instant::now();
+            let typed = types::check(&module);
+            let types_ms = ms(t.elapsed().as_nanos());
+            s += ")\n  ";
+            match &typed {
+                Ok(_) => s += &format!("(types :status ok :ms {})", types_ms),
+                Err(errors) => {
+                    s += &format!("(types :status error :ms {} :errors (", types_ms);
+                    for d in errors {
+                        s += &format!("\n    {}", d.to_sexp());
+                    }
+                    s += "))";
+                }
+            }
+            s += "\n  (smt :status skipped :until M1-4))";
             println!("{}", s);
-            if roundtrip_ok { 0 } else { 1 }
+            if roundtrip_ok && typed.is_ok() { 0 } else { 1 }
         }
         "fmt" => {
             let default_to = if path.ends_with(".wisp") { "sexp" } else { "wisp" };
@@ -153,10 +188,14 @@ fn real_main(args: Vec<String>) -> i32 {
             0
         }
         "bench" => {
-            let prog = match load(&src) {
-                Ok(p) => p,
+            let module = match load(&src) {
+                Ok(m) => m,
                 Err(c) => return c,
             };
+            if let Err(c) = typecheck_before_running(&module, has("--no-typecheck")) {
+                return c;
+            }
+            let prog = Program::new(&module);
             let n: usize = match opt_value(opts, "-n").map(str::parse).unwrap_or(Ok(10)) {
                 Ok(n) if n > 0 => n,
                 _ => {

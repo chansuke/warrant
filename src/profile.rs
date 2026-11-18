@@ -73,15 +73,18 @@ pub fn ms(ns: u128) -> String {
 pub struct RunInfo {
     pub wall_ns: u128,
     pub contracts: bool,
+    /// `None` when run with `--no-typecheck`.
+    pub types_ns: Option<u128>,
 }
 
 pub fn report(file: &str, status: &str, parse_ns: u128, run: &RunInfo, p: &Profiler) -> String {
     let mut s = String::from("(report\n");
     s += &format!("  (file {})\n  (status {})\n", quote_str(file), status);
-    s += &format!(
-        "  (check (parse-ms {}) (types :status skipped :until M1) (smt :status skipped :until M1))\n",
-        ms(parse_ns)
-    );
+    let types = match run.types_ns {
+        Some(ns) => format!("(types :status ok :ms {})", ms(ns)),
+        None => "(types :status skipped)".into(),
+    };
+    s += &format!("  (check (parse-ms {}) {} (smt :status skipped :until M1-4))\n", ms(parse_ns), types);
     s += &format!(
         "  (run (wall-ms {}) (contracts {})\n       (calls {}) (closure-calls {}) (builtin-calls {}) (max-depth {})\n       (vec-allocs {}) (vec-elems {}) (contract-checks {}) (contract-ms {}))\n",
         ms(run.wall_ns),
