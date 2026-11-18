@@ -9,5 +9,7 @@ pub mod effects;
 pub mod eval;
 pub mod profile;
 pub mod sexp;
+pub mod smt;
+pub mod solver;
 pub mod types;
 pub mod wisp;
