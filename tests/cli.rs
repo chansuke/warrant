@@ -155,3 +155,22 @@ fn auto_still_catches_an_ensures_it_could_not_prove() {
     assert_eq!(o.code, 1, "{}", o.stdout);
     assert!(o.stdout.starts_with("(error :kind contract :msg \"ensures failed in bad-sort"), "{}", o.stdout);
 }
+
+#[test]
+fn spec_diff_blocks_weakened_contracts_and_lists_body_changes() {
+    let base = std::fs::read_to_string("examples/msort.wrt").unwrap();
+    let old = source("sd_old.wrt", &base);
+    let body_only = source("sd_body.wrt", &base.replace("(* i 7919)", "(* i 7917)"));
+    let o = warrant(&["spec-diff", &old, &body_only, "--no-smt"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert!(o.stdout.contains("(spec)\n  (impl\n    (gen :body changed))\n  (status ok))"), "{}", o.stdout);
+
+    let dropped = source("sd_weak.wrt", &base.replace("(:ensures (sorted? result) (perm? result xs)", "(:ensures (perm? result xs)"));
+    let o = warrant(&["spec-diff", &old, &dropped]);
+    assert_eq!(o.code, 1, "{}", o.stdout);
+    assert!(o.stdout.contains("(msort :clause ensures :change removed :verdict weakened :old (sorted? result))"), "{}", o.stdout);
+    assert!(o.stdout.contains("(status weakened)"), "{}", o.stdout);
+
+    let o = warrant(&["spec-diff", &old]);
+    assert_eq!(o.code, 2);
+}

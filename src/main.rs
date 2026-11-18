@@ -15,7 +15,7 @@ use warrant::sexp::{self, quote_str, Sexp, SpanTree};
 use warrant::solver::Z3;
 use warrant::types::TypeInfo;
 use warrant::verify::VcResult;
-use warrant::{effects, types, vc, verify, wisp};
+use warrant::{effects, specdiff, types, vc, verify, wisp};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -33,6 +33,7 @@ const USAGE: &str = "usage: warrant <command> FILE [options]
   fmt   FILE [--to wisp|sexp]                    convert between canonical S-expr and the Wisp view
   bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck]
                                                  time main N times; enforce (:budget (wall-ms N)) on main
+  spec-diff OLD NEW [--no-smt] [--timeout-ms N]  list spec changes; exit 1 if a contract was weakened
 Proof options (check, and run/bench with --contracts auto, the default):
   --timeout-ms N (per VC, default 2000)  --jobs N (default: all cores)  --cache-dir D  --no-cache
 --no-contracts is --contracts off. FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
@@ -323,10 +324,35 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
     code
 }
 
+fn spec_diff(old_path: &str, new_path: &str, opts: &[String]) -> i32 {
+    let mut modules = Vec::new();
+    for path in [old_path, new_path] {
+        match read_forms(path).and_then(|src| load(&src)) {
+            Ok(m) => modules.push(m),
+            Err(c) => return c,
+        }
+    }
+    let timeout_ms = match positive(opts, "--timeout-ms", 2000) {
+        Ok(t) => t,
+        Err(c) => return c,
+    };
+    let z3 = if opts.iter().any(|o| o == "--no-smt") { None } else { Z3::find(timeout_ms) };
+    let d = specdiff::diff(&modules[0], &modules[1], z3.as_ref().map(|z| z as &dyn warrant::solver::Solver));
+    println!("{}", d.to_sexp(old_path, new_path));
+    if d.weakened() { 1 } else { 0 }
+}
+
 fn real_main(args: Vec<String>) -> i32 {
     if args.len() < 3 {
         eprintln!("{}", USAGE);
         return 2;
+    }
+    if args[1] == "spec-diff" {
+        let Some(new_path) = args.get(3) else {
+            eprintln!("{}", USAGE);
+            return 2;
+        };
+        return spec_diff(&args[2], new_path, &args[4..]);
     }
     let (cmd, path, opts) = (args[1].as_str(), args[2].as_str(), &args[3..]);
     let src = match read_forms(path) {
