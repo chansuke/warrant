@@ -18,6 +18,27 @@ pub enum Sexp {
     Vector(Vec<Sexp>),
 }
 
+/// Where a form starts in the source (1-based).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pos {
+    pub line: usize,
+    pub col: usize,
+}
+
+/// Positions for a parsed form, shaped exactly like the `Sexp` it belongs to.
+/// Kept beside the tree rather than inside it so `Sexp` equality ignores layout.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpanTree {
+    pub at: Pos,
+    pub kids: Vec<SpanTree>,
+}
+
+impl SpanTree {
+    pub fn leaf(line: usize, col: usize) -> Self {
+        SpanTree { at: Pos { line, col }, kids: Vec::new() }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseError {
     pub line: usize,
@@ -196,25 +217,28 @@ impl<'a> Parser<'a> {
         self.lex.next_tok()
     }
 
-    pub fn parse_expr(&mut self) -> Result<Option<Sexp>, ParseError> {
+    pub fn parse_expr(&mut self) -> Result<Option<(Sexp, SpanTree)>, ParseError> {
         let Some((tok, l, c)) = self.next()? else { return Ok(None) };
+        let mut span = SpanTree::leaf(l, c);
         let e = match tok {
-            Tok::LParen => Sexp::List(self.parse_seq(Tok::RParen, l, c)?),
-            Tok::LBrack => Sexp::Vector(self.parse_seq(Tok::RBrack, l, c)?),
+            Tok::LParen => Sexp::List(self.parse_seq(Tok::RParen, &mut span)?),
+            Tok::LBrack => Sexp::Vector(self.parse_seq(Tok::RBrack, &mut span)?),
             Tok::RParen | Tok::RBrack => {
                 return Err(ParseError::new(l, c, "unexpected closing bracket"))
             }
             Tok::Str(s) => Sexp::Str(s),
             Tok::Atom(a) => atom(&a, l, c)?,
         };
-        Ok(Some(e))
+        Ok(Some((e, span)))
     }
 
-    fn parse_seq(&mut self, close: Tok, l: usize, c: usize) -> Result<Vec<Sexp>, ParseError> {
+    fn parse_seq(&mut self, close: Tok, span: &mut SpanTree) -> Result<Vec<Sexp>, ParseError> {
         let mut v = Vec::new();
         loop {
             match self.peek()? {
-                None => return Err(ParseError::new(l, c, "bracket opened here is never closed")),
+                None => {
+                    return Err(ParseError::new(span.at.line, span.at.col, "bracket opened here is never closed"))
+                }
                 Some((t, tl, tc)) if t == Tok::RParen || t == Tok::RBrack => {
                     self.next()?;
                     if t == close {
@@ -222,19 +246,28 @@ impl<'a> Parser<'a> {
                     }
                     return Err(ParseError::new(tl, tc, "mismatched closing bracket"));
                 }
-                _ => v.push(self.parse_expr()?.expect("peeked a token")),
+                _ => {
+                    let (e, s) = self.parse_expr()?.expect("peeked a token");
+                    v.push(e);
+                    span.kids.push(s);
+                }
             }
         }
     }
 }
 
 pub fn parse_all(src: &str) -> Result<Vec<Sexp>, ParseError> {
+    parse_all_spanned(src).map(|(forms, _)| forms)
+}
+
+pub fn parse_all_spanned(src: &str) -> Result<(Vec<Sexp>, Vec<SpanTree>), ParseError> {
     let mut p = Parser::new(src);
-    let mut out = Vec::new();
-    while let Some(e) = p.parse_expr()? {
-        out.push(e);
+    let (mut forms, mut spans) = (Vec::new(), Vec::new());
+    while let Some((e, s)) = p.parse_expr()? {
+        forms.push(e);
+        spans.push(s);
     }
-    Ok(out)
+    Ok((forms, spans))
 }
 
 // ---------- printing ----------
@@ -351,6 +384,17 @@ mod tests {
     fn reports_position_of_unclosed_bracket() {
         let e = parse_all("(a\n  (b c)").unwrap_err();
         assert_eq!((e.line, e.col), (1, 1));
+    }
+
+    #[test]
+    fn spans_mirror_the_tree_with_start_positions() {
+        let (f, s) = parse_all_spanned("(a\n  (b c)\n  [d])").unwrap();
+        assert_eq!(flat(&f[0]), "(a (b c) [d])");
+        let at = |t: &SpanTree| (t.at.line, t.at.col);
+        assert_eq!(at(&s[0]), (1, 1));
+        assert_eq!(at(&s[0].kids[1]), (2, 3));
+        assert_eq!(at(&s[0].kids[1].kids[1]), (2, 6));
+        assert_eq!(at(&s[0].kids[2].kids[0]), (3, 4));
     }
 
     #[test]

@@ -11,7 +11,7 @@
 //! - Inside brackets `( )` and `[ ]` the text is plain S-expression syntax.
 //! - Brackets must close on the line they open. Indent with spaces only.
 
-use crate::sexp::{flat, is_clause, ParseError, Parser, Sexp, WIDTH};
+use crate::sexp::{flat, is_clause, ParseError, Parser, Sexp, SpanTree, WIDTH};
 
 // ---------- printing ----------
 
@@ -100,14 +100,27 @@ fn inline_line(items: &[Sexp]) -> String {
 
 // ---------- parsing ----------
 
+type Item = (Sexp, SpanTree);
+
 struct Line {
     indent: usize,
-    items: Vec<Sexp>,
+    items: Vec<Item>,
     splice: bool,
     no: usize,
 }
 
 pub fn parse(src: &str) -> Result<Vec<Sexp>, ParseError> {
+    parse_spanned(src).map(|(forms, _)| forms)
+}
+
+/// A list built from a Wisp line or a `:` starts where its first item starts.
+fn list_of(items: Vec<Item>) -> Item {
+    let at = items[0].1.at;
+    let (v, kids) = items.into_iter().unzip();
+    (Sexp::List(v), SpanTree { at, kids })
+}
+
+pub fn parse_spanned(src: &str) -> Result<(Vec<Sexp>, Vec<SpanTree>), ParseError> {
     let mut lines = Vec::new();
     for (i, raw) in src.lines().enumerate() {
         let no = i + 1;
@@ -124,7 +137,7 @@ pub fn parse(src: &str) -> Result<Vec<Sexp>, ParseError> {
         if items.is_empty() {
             continue; // blank or comment-only line
         }
-        let splice = items[0] == Sexp::Sym(".".into());
+        let splice = items[0].0 == Sexp::Sym(".".into());
         if splice {
             items.remove(0);
             if items.is_empty() {
@@ -136,7 +149,7 @@ pub fn parse(src: &str) -> Result<Vec<Sexp>, ParseError> {
     }
     let mut out = Vec::new();
     if lines.is_empty() {
-        return Ok(out);
+        return Ok((Vec::new(), Vec::new()));
     }
     if lines[0].indent != 0 {
         return Err(ParseError::new(lines[0].no, 1, "first form must not be indented"));
@@ -146,11 +159,11 @@ pub fn parse(src: &str) -> Result<Vec<Sexp>, ParseError> {
     if i < lines.len() {
         return Err(ParseError::new(lines[i].no, 1, "inconsistent indentation"));
     }
-    Ok(out)
+    Ok(out.into_iter().unzip())
 }
 
-fn fold_colon(mut items: Vec<Sexp>) -> Result<Vec<Sexp>, String> {
-    match items.iter().position(|x| *x == Sexp::Sym(":".into())) {
+fn fold_colon(mut items: Vec<Item>) -> Result<Vec<Item>, String> {
+    match items.iter().position(|x| x.0 == Sexp::Sym(":".into())) {
         None => Ok(items),
         Some(p) => {
             let tail = items.split_off(p + 1);
@@ -159,13 +172,13 @@ fn fold_colon(mut items: Vec<Sexp>) -> Result<Vec<Sexp>, String> {
             if tail.is_empty() {
                 return Err("`:` must be followed by an expression".into());
             }
-            items.push(Sexp::List(tail));
+            items.push(list_of(tail));
             Ok(items)
         }
     }
 }
 
-fn block(lines: &[Line], i: &mut usize, out: &mut Vec<Sexp>) -> Result<(), ParseError> {
+fn block(lines: &[Line], i: &mut usize, out: &mut Vec<Item>) -> Result<(), ParseError> {
     let base = lines[*i].indent;
     while *i < lines.len() {
         let ind = lines[*i].indent;
@@ -192,7 +205,7 @@ fn block(lines: &[Line], i: &mut usize, out: &mut Vec<Sexp>) -> Result<(), Parse
         } else {
             let mut v = l.items.clone();
             v.extend(children);
-            out.push(Sexp::List(v));
+            out.push(list_of(v));
         }
     }
     Ok(())
@@ -227,6 +240,21 @@ mod tests {
         roundtrip("(a) (b c) () [x : (T u)] (f (g) [] (h : i))");
         roundtrip("(defn f [x : i64] -> i64 (:effects []) (:ensures (>= result 0)) (if (< x 0) (- x) x))");
         roundtrip("(a b c d e f g h i j k l m n o p q r s t u v w x y z aa bb cc dd ee ff gg hh ii jj kk)");
+    }
+
+    #[test]
+    fn spans_point_at_the_wisp_source() {
+        let (f, s) = parse_spanned("defn f [x : i64] -> i64\n  :ensures (>= result 0)\n  fold + 0 : map g xs").unwrap();
+        assert_eq!(flat(&f[0]), "(defn f [x : i64] -> i64 (:ensures (>= result 0)) (fold + 0 (map g xs)))");
+        let at = |t: &SpanTree| (t.at.line, t.at.col);
+        assert_eq!(at(&s[0]), (1, 1));
+        assert_eq!(at(&s[0].kids[2].kids[2]), (1, 13));
+        assert_eq!(at(&s[0].kids[5]), (2, 3));
+        assert_eq!(at(&s[0].kids[5].kids[1].kids[1]), (2, 16));
+        let fold = &s[0].kids[6];
+        assert_eq!(at(fold), (3, 3));
+        assert_eq!(at(&fold.kids[3]), (3, 14));
+        assert_eq!(at(&fold.kids[3].kids[2]), (3, 20));
     }
 
     #[test]
