@@ -12,7 +12,7 @@
 
 use crate::ast::{Expr, ExprKind, FnDecl, FnIdx, LambdaParam, Module};
 use crate::builtin::Builtin;
-use crate::sexp::{quote_str, Pos};
+use crate::sexp::Pos;
 use crate::smt::{int_lit, quote_sym, sort, str_lit, vec_sort, I64_MIN, MAX_LEN, PRELUDE};
 use crate::types::{Ty, TypeInfo};
 
@@ -597,11 +597,6 @@ impl<'a> Exec<'a> {
 pub fn counterexample_sexp(model: &[(String, String)]) -> String {
     let parts: Vec<String> = model.iter().map(|(k, v)| format!("{} {}", k, v)).collect();
     format!("({})", parts.join(" "))
-}
-
-/// `:reason "..."` for an unsupported obligation.
-pub fn reason_sexp(why: &str) -> String {
-    format!(":reason {}", quote_str(why))
 }
 
 #[cfg(test)]
