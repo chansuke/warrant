@@ -63,7 +63,7 @@ AIエージェントが主に実装を書き、**人間はボトルネックに�
 
 - 特殊形式: `if`（else 必須）、`let [x e ...]`、`fn [x] ...`、`do`、`and`、`or`
 - 値: i64（オーバーフローはエラー。ラップしない）、bool、str、vec、関数
-- 組み込み: `+ - * / mod = < <= > >= not len get slice rest concat cons empty? range vec map fold filter sorted? perm? print`
+- 組み込み: `+ - * / mod = < <= > >= not len get slice rest concat cons empty? range vec map fold filter all? sorted? perm? print`（`all?` は M1 で追加、D18）
 - `print` だけがエフェクト `io` を持つ。エフェクト検査は**推移的**（呼び出し元すべての宣言を確認）
 - 型は構文として解析するだけで、M0 では検査しない
 - M1 から: `defn` の引数と戻り値の型注釈は必須（`ast::lower` が拒否する）。型は `i64` `Bool` `Str` `(Vec T)` `(Fn [T ...] R)` `(Fn [T ...] R :effects [io])`。未定義シンボルは実行前に `:kind unbound :at (line L col C)` で報告する

@@ -567,6 +567,18 @@ impl<'p> Interp<'p> {
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }
+            B::All => {
+                arity(name, &args, 2)?;
+                let v = vecv(&args[1], name)?;
+                for x in v.iter() {
+                    match self.apply(&args[0], vec![x.clone()])? {
+                        Value::Bool(true) => {}
+                        Value::Bool(false) => return Ok(Value::Bool(false)),
+                        o => return Err(RtError::new("type", format!("all? predicate must return bool, got {}", type_name(&o)))),
+                    }
+                }
+                Ok(Value::Bool(true))
+            }
             B::Fold => {
                 arity(name, &args, 3)?;
                 let v = vecv(&args[2], name)?;

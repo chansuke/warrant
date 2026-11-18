@@ -76,6 +76,16 @@ fn requires_is_checked_before_the_body() {
 }
 
 #[test]
+fn all_checks_every_element_and_stops_at_the_first_failure() {
+    let src = "(defn small? [x : i64] -> Bool (< x 10))
+               (defn main [] -> (Vec Bool)
+                 (vec (all? small? [1 2 3]) (all? small? [1 20 3]) (all? small? [])))";
+    assert_eq!(run(src).unwrap(), "[true false true]");
+    let guarded = "(defn main [] -> Bool (all? (fn [x] (< (/ 10 x) 5)) [1 0]))";
+    assert_eq!(run(guarded).unwrap(), "false");
+}
+
+#[test]
 fn load_errors_point_at_the_source_in_both_views() {
     let wrt = "(defn f [x : i64] -> i64\n  (+ x y))";
     let (forms, spans) = parse_all_spanned(wrt).unwrap();

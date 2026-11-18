@@ -306,6 +306,10 @@ impl Infer<'_> {
                 let a = self.fresh();
                 Shape::Fixed(vec![fun(vec![a.clone()], Bool), vec(&a)], vec(&a))
             }
+            B::All => {
+                let a = self.fresh();
+                Shape::Fixed(vec![fun(vec![a.clone()], Bool), vec(&a)], Bool)
+            }
             B::IsSorted => Shape::Fixed(vec![vec(&I64)], Bool),
             B::IsPerm => Shape::Fixed(vec![vec(&I64), vec(&I64)], Bool),
             B::Print => Shape::Variadic { min: 0, arg: None, ret: Bool },
