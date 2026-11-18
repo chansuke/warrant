@@ -5,6 +5,7 @@
 pub mod ast;
 pub mod builtin;
 pub mod diag;
+pub mod effects;
 pub mod eval;
 pub mod profile;
 pub mod sexp;
