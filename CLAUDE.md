@@ -29,7 +29,8 @@ target/release/warrant bench examples/msort.wrt -n 10
 | `src/smt.rs` | SMT-LIB の語彙（前置き、ベクタのデータ型、`in64`、`tdiv`、`sorted-VI`、長さの上限） |
 | `src/vc.rs` | 記号実行による VC 生成。1つの `Obligation` が1つの完結したスクリプト |
 | `src/solver.rs` | `trait Solver` と `Z3`（`z3 -in` のサブプロセス、`get-value` で反例を読む） |
-| `src/verify.rs` | VC をソルバに渡し、`(smt ...)` の集計を作る |
+| `src/verify.rs` | VC を並列にソルバに渡し（キャッシュ経由）、`(smt ...)` の集計を作る |
+| `src/cache.rs` | VC 単位の証明キャッシュ（`.warrant/cache/`、キーはソルバの fingerprint とスクリプト） |
 | `src/eval.rs` | `Program::new`（`Module` から作る）、`Interp`（評価、契約、エフェクト、組み込み関数） |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |
 | `src/main.rs` | CLI。大きいスタックのスレッドで実行し、終了コードを返す |
