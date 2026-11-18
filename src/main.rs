@@ -6,7 +6,8 @@
 
 use std::time::Instant;
 use warrant::ast::{self, Module};
-use warrant::types;
+use warrant::diag::Diag;
+use warrant::{effects, types};
 use warrant::eval::{self, Interp, Program};
 use warrant::profile::{self, ms, RunInfo};
 use warrant::sexp::{self, quote_str, Sexp, SpanTree};
@@ -66,21 +67,38 @@ fn load(src: &Source) -> Result<Module, i32> {
     })
 }
 
-/// Type-checks unless `--no-typecheck`. Returns the time taken, or `None` when skipped.
-fn typecheck_before_running(m: &Module, skip: bool) -> Result<Option<u128>, i32> {
-    if skip {
-        return Ok(None);
-    }
-    let t = Instant::now();
-    match types::check(m) {
-        Ok(_) => Ok(Some(t.elapsed().as_nanos())),
-        Err(errors) => {
-            for d in errors {
-                println!("{}", d.to_sexp());
-            }
-            Err(1)
+/// `(types :status ok :ms T)` or the same with `:status error :errors (...)`.
+fn section(name: &str, ns: u128, errors: &[Diag]) -> String {
+    let status = if errors.is_empty() { "ok" } else { "error" };
+    let mut s = format!("\n  ({} :status {} :ms {}", name, status, ms(ns));
+    if !errors.is_empty() {
+        s += " :errors (";
+        for d in errors {
+            s += &format!("\n    {}", d.to_sexp());
         }
+        s += ")";
     }
+    s + ")"
+}
+
+/// Static checks that gate `run` and `bench`. Effects are always checked;
+/// `--no-typecheck` skips only types. Returns the type-checking time, or
+/// `None` when it was skipped.
+fn check_before_running(m: &Module, skip_types: bool) -> Result<Option<u128>, i32> {
+    let mut errors = effects::check(m).1;
+    let mut types_ns = None;
+    if !skip_types {
+        let t = Instant::now();
+        errors.extend(types::check(m).err().unwrap_or_default());
+        types_ns = Some(t.elapsed().as_nanos());
+    }
+    if errors.is_empty() {
+        return Ok(types_ns);
+    }
+    for d in errors {
+        println!("{}", d.to_sexp());
+    }
+    Err(1)
 }
 
 fn real_main(args: Vec<String>) -> i32 {
@@ -101,7 +119,7 @@ fn real_main(args: Vec<String>) -> i32 {
                 Ok(m) => m,
                 Err(c) => return c,
             };
-            let types_ns = match typecheck_before_running(&module, has("--no-typecheck")) {
+            let types_ns = match check_before_running(&module, has("--no-typecheck")) {
                 Ok(t) => t,
                 Err(c) => return c,
             };
@@ -132,48 +150,39 @@ fn real_main(args: Vec<String>) -> i32 {
                 Ok(m) => m,
                 Err(c) => return c,
             };
-            let prog = Program::new(&module);
             let view = wisp::print_all(forms);
             let roundtrip_ok = matches!(wisp::parse(&view), Ok(back) if back == *forms);
+            let t = Instant::now();
+            let type_errors = types::check(&module).err().unwrap_or_default();
+            let types_ns = t.elapsed().as_nanos();
+            let t = Instant::now();
+            let (fx, effect_errors) = effects::check(&module);
+            let effects_ns = t.elapsed().as_nanos();
             let mut s = format!(
                 "(check\n  (file {})\n  (parse-ms {})\n  (roundtrip {})\n  (fns",
                 quote_str(path),
                 ms(parse_ns),
                 if roundtrip_ok { "ok" } else { "fail" }
             );
-            for name in &prog.order {
-                let d = &prog.fns[name];
-                let effects = match &d.effects {
-                    Some(es) => format!("[{}]", es.join(" ")),
-                    None => "unchecked".into(),
-                };
-                let level = if d.requires.is_empty() && d.ensures.is_empty() { "unspecified" } else { "runtime-checked" };
+            for (i, d) in module.fns.iter().enumerate() {
+                let declared = d.spec.effects.as_ref().map_or("undeclared".into(), ast::effects_sexp);
+                let level = if d.spec.requires.is_empty() && d.spec.ensures.is_empty() { "unspecified" } else { "runtime-checked" };
                 s += &format!(
-                    "\n    ({} :effects {} :requires {} :ensures {} :level {})",
-                    name,
-                    effects,
-                    d.requires.len(),
-                    d.ensures.len(),
+                    "\n    ({} :effects {} :inferred {} :requires {} :ensures {} :level {})",
+                    d.name,
+                    declared,
+                    ast::effects_sexp(&fx.set(i)),
+                    d.spec.requires.len(),
+                    d.spec.ensures.len(),
                     level
                 );
             }
-            let t = Instant::now();
-            let typed = types::check(&module);
-            let types_ms = ms(t.elapsed().as_nanos());
-            s += ")\n  ";
-            match &typed {
-                Ok(_) => s += &format!("(types :status ok :ms {})", types_ms),
-                Err(errors) => {
-                    s += &format!("(types :status error :ms {} :errors (", types_ms);
-                    for d in errors {
-                        s += &format!("\n    {}", d.to_sexp());
-                    }
-                    s += "))";
-                }
-            }
+            s += ")";
+            s += &section("types", types_ns, &type_errors);
+            s += &section("effects", effects_ns, &effect_errors);
             s += "\n  (smt :status skipped :until M1-4))";
             println!("{}", s);
-            if roundtrip_ok && typed.is_ok() { 0 } else { 1 }
+            if roundtrip_ok && type_errors.is_empty() && effect_errors.is_empty() { 0 } else { 1 }
         }
         "fmt" => {
             let default_to = if path.ends_with(".wisp") { "sexp" } else { "wisp" };
@@ -192,7 +201,7 @@ fn real_main(args: Vec<String>) -> i32 {
                 Ok(m) => m,
                 Err(c) => return c,
             };
-            if let Err(c) = typecheck_before_running(&module, has("--no-typecheck")) {
+            if let Err(c) = check_before_running(&module, has("--no-typecheck")) {
                 return c;
             }
             let prog = Program::new(&module);

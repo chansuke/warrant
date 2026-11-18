@@ -84,7 +84,7 @@ pub fn report(file: &str, status: &str, parse_ns: u128, run: &RunInfo, p: &Profi
         Some(ns) => format!("(types :status ok :ms {})", ms(ns)),
         None => "(types :status skipped)".into(),
     };
-    s += &format!("  (check (parse-ms {}) {} (smt :status skipped :until M1-4))\n", ms(parse_ns), types);
+    s += &format!("  (check (parse-ms {}) {} (effects :status ok) (smt :status skipped :until M1-4))\n", ms(parse_ns), types);
     s += &format!(
         "  (run (wall-ms {}) (contracts {})\n       (calls {}) (closure-calls {}) (builtin-calls {}) (max-depth {})\n       (vec-allocs {}) (vec-elems {}) (contract-checks {}) (contract-ms {}))\n",
         ms(run.wall_ns),

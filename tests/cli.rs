@@ -41,8 +41,19 @@ fn run_refuses_ill_typed_programs_unless_told_not_to_check() {
 }
 
 #[test]
+fn effect_leak_is_rejected_by_check_and_before_run() {
+    let want = "(error :kind effect :at (line 9 col 7) :msg \"`add` declares (:effects []) but performs io via (log print)\")";
+    let o = warrant(&["check", "examples/effect_leak.wrt"]);
+    assert_eq!(o.code, 1, "{}", o.stdout);
+    assert!(o.stdout.contains("(log :effects undeclared :inferred [io]"), "{}", o.stdout);
+    assert!(o.stdout.contains(want), "{}", o.stdout);
+    let o = warrant(&["run", "examples/effect_leak.wrt", "--no-typecheck"]);
+    assert_eq!((o.code, o.stdout.trim()), (1, want));
+}
+
+#[test]
 fn examples_pass_check() {
-    for ex in ["examples/msort.wrt", "examples/msort.wisp", "examples/sum_sq.wrt", "examples/effect_leak.wrt"] {
+    for ex in ["examples/msort.wrt", "examples/msort.wisp", "examples/sum_sq.wrt"] {
         let o = warrant(&["check", ex]);
         assert_eq!(o.code, 0, "{}: {}", ex, o.stdout);
         assert!(o.stdout.contains("(types :status ok"), "{}: {}", ex, o.stdout);
