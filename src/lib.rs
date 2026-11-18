@@ -8,4 +8,5 @@ pub mod diag;
 pub mod eval;
 pub mod profile;
 pub mod sexp;
+pub mod types;
 pub mod wisp;
