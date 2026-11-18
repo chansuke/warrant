@@ -84,12 +84,14 @@ AIエージェントが主に実装を書き、**人間はボトルネックに�
 
 ```
 warrant run   FILE [--report] [--no-contracts] [--no-typecheck]
-warrant check FILE
+warrant check FILE [--timeout-ms N]
 warrant fmt   FILE [--to wisp|sexp]
 warrant bench FILE [-n N] [--no-contracts] [--no-typecheck]
 ```
 
 `0` 成功 / `1` 実行時・契約・エフェクト違反、check 失敗 / `2` 構文・ロード・使い方 / `3` 性能予算超過
+
+`check` は型検査が通れば VC を生成して Z3 で証明する。出力は `(smt :status ok|failed :vcs N :proved P :failed F :unknown U :unsupported X :ms T :issues (...))` で、証明できなかった VC を `(vc :fn F :kind K :at (line L col C) :status failed :counterexample (xs [...]))` の形で列挙する。VC が1つでも failed なら終了コード 1。unknown（タイムアウト、既定 2 秒）と unsupported（`perm?` など）は失敗にしない。z3 が無ければ `(smt :status unavailable ...)`。再帰する関数は `:termination assumed`（停止性は証明しない）
 
 `run` と `bench` は実行前に型検査とエフェクト検査を行い、エラーがあれば実行せず終了コード 1 で終わる。`--no-typecheck` で省略できるのは型検査だけで、エフェクト検査は省略できない（D20）。未定義シンボルと型注釈の欠落はロードの段階で拒否され、終了コード 2
 
@@ -117,6 +119,7 @@ warrant bench FILE [-n N] [--no-contracts] [--no-typecheck]
 ## 8. 未決事項
 
 - 停止性: `(:decreases ...)` を入れるか、M1 では `assumed` 扱いにするか
-- `perm?` のような多重集合の性質をどこまで自動証明するか（補題をエージェントに書かせる仕組み）
+- `perm?` のような多重集合の性質をどこまで自動証明するか（補題をエージェントに書かせる仕組み）。M1 では `perm?` を含む節は unsupported として実行時検査に残る。msort の例では、`perm?` の2節以外の 37 VC が proved
+- `fold` の結果は不透明（アキュムレータに不変条件を書く手段がない）。`(:invariant ...)` のような節を足すか、再帰で書かせるか
 - 型システムの範囲（多相、ユーザー定義型、所有権／一意性を型に出すか）
 - 並列化の粒度の決め方（コストモデル、閾値）
