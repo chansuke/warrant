@@ -51,11 +51,45 @@ fn effect_leak_is_rejected_by_check_and_before_run() {
     assert_eq!((o.code, o.stdout.trim()), (1, want));
 }
 
+fn have_z3() -> bool {
+    let ok = Command::new("z3").arg("--version").output().is_ok_and(|o| o.status.success());
+    if !ok {
+        eprintln!("z3 not found; skipping");
+    }
+    ok
+}
+
 #[test]
 fn examples_pass_check() {
-    for ex in ["examples/msort.wrt", "examples/msort.wisp", "examples/sum_sq.wrt"] {
+    if !have_z3() {
+        return;
+    }
+    for ex in ["examples/msort.wrt", "examples/msort.wisp", "examples/sum_sq_ok.wrt"] {
         let o = warrant(&["check", ex]);
         assert_eq!(o.code, 0, "{}: {}", ex, o.stdout);
         assert!(o.stdout.contains("(types :status ok"), "{}: {}", ex, o.stdout);
+        assert!(o.stdout.contains(":failed 0 :unknown 0"), "{}: {}", ex, o.stdout);
     }
+}
+
+#[test]
+fn check_rejects_sum_sq_overflow_with_a_counterexample_before_running() {
+    if !have_z3() {
+        return;
+    }
+    let o = warrant(&["check", "examples/sum_sq.wrt"]);
+    assert_eq!(o.code, 1, "{}", o.stdout);
+    let line = o.stdout.lines().find(|l| l.contains(":kind overflow :at (line 7 col 26)")).unwrap_or_else(|| panic!("{}", o.stdout));
+    assert!(line.contains(":status failed :counterexample (xs ["), "{}", line);
+}
+
+#[test]
+fn msort_proves_everything_but_perm() {
+    if !have_z3() {
+        return;
+    }
+    let o = warrant(&["check", "examples/msort.wrt"]);
+    assert!(o.stdout.contains(":proved 37 :failed 0 :unknown 0 :unsupported 2"), "{}", o.stdout);
+    assert_eq!(o.stdout.matches("depends on perm?").count(), 2, "{}", o.stdout);
+    assert!(o.stdout.contains("(merge :effects [] :inferred [] :requires 2 :ensures 4 :level runtime-checked :termination assumed)"), "{}", o.stdout);
 }

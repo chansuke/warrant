@@ -13,4 +13,5 @@ pub mod smt;
 pub mod solver;
 pub mod types;
 pub mod vc;
+pub mod verify;
 pub mod wisp;

@@ -7,7 +7,8 @@
 use std::time::Instant;
 use warrant::ast::{self, Module};
 use warrant::diag::Diag;
-use warrant::{effects, types};
+use warrant::solver::Z3;
+use warrant::{effects, types, vc, verify};
 use warrant::eval::{self, Interp, Program};
 use warrant::profile::{self, ms, RunInfo};
 use warrant::sexp::{self, quote_str, Sexp, SpanTree};
@@ -25,7 +26,7 @@ fn main() {
 
 const USAGE: &str = "usage: warrant <command> FILE [options]
   run   FILE [--report] [--no-contracts] [--no-typecheck]   run (defn main [] ...)
-  check FILE                                              parse, load, type-check, list verification levels
+  check FILE [--timeout-ms N]                             parse, load, type-check, prove contracts with z3
   fmt   FILE [--to wisp|sexp]                             convert between canonical S-expr and the Wisp view
   bench FILE [-n N] [--no-contracts] [--no-typecheck]     time main N times; enforce (:budget (wall-ms N)) on main
 FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
@@ -153,8 +154,9 @@ fn real_main(args: Vec<String>) -> i32 {
             let view = wisp::print_all(forms);
             let roundtrip_ok = matches!(wisp::parse(&view), Ok(back) if back == *forms);
             let t = Instant::now();
-            let type_errors = types::check(&module).err().unwrap_or_default();
+            let typed = types::check(&module);
             let types_ns = t.elapsed().as_nanos();
+            let type_errors = typed.as_ref().err().cloned().unwrap_or_default();
             let t = Instant::now();
             let (fx, effect_errors) = effects::check(&module);
             let effects_ns = t.elapsed().as_nanos();
@@ -164,25 +166,46 @@ fn real_main(args: Vec<String>) -> i32 {
                 ms(parse_ns),
                 if roundtrip_ok { "ok" } else { "fail" }
             );
+            let recursive = module.recursive();
             for (i, d) in module.fns.iter().enumerate() {
                 let declared = d.spec.effects.as_ref().map_or("undeclared".into(), ast::effects_sexp);
                 let level = if d.spec.requires.is_empty() && d.spec.ensures.is_empty() { "unspecified" } else { "runtime-checked" };
                 s += &format!(
-                    "\n    ({} :effects {} :inferred {} :requires {} :ensures {} :level {})",
+                    "\n    ({} :effects {} :inferred {} :requires {} :ensures {} :level {}{})",
                     d.name,
                     declared,
                     ast::effects_sexp(&fx.set(i)),
                     d.spec.requires.len(),
                     d.spec.ensures.len(),
-                    level
+                    level,
+                    if recursive[i] { " :termination assumed" } else { "" }
                 );
             }
             s += ")";
             s += &section("types", types_ns, &type_errors);
             s += &section("effects", effects_ns, &effect_errors);
-            s += "\n  (smt :status skipped :until M1-4))";
+            let timeout_ms: u64 = match opt_value(opts, "--timeout-ms").map(str::parse).unwrap_or(Ok(2000)) {
+                Ok(n) if n > 0 => n,
+                _ => {
+                    println!("(error :kind usage :msg \"--timeout-ms must be a positive integer\")");
+                    return 2;
+                }
+            };
+            let mut vcs_failed = false;
+            s += "\n  ";
+            match (&typed, Z3::find(timeout_ms)) {
+                (Err(_), _) => s += "(smt :status skipped :reason \"type errors\")",
+                (Ok(_), None) => s += "(smt :status unavailable :reason \"z3 not found on PATH\")",
+                (Ok(info), Some(mut z3)) => {
+                    let t = Instant::now();
+                    let results = verify::discharge(vc::generate(&module, info), &mut z3);
+                    vcs_failed = verify::any_failed(&results);
+                    s += &verify::summary_sexp(&results, t.elapsed().as_nanos());
+                }
+            }
+            s += ")";
             println!("{}", s);
-            if roundtrip_ok && type_errors.is_empty() && effect_errors.is_empty() { 0 } else { 1 }
+            if roundtrip_ok && type_errors.is_empty() && effect_errors.is_empty() && !vcs_failed { 0 } else { 1 }
         }
         "fmt" => {
             let default_to = if path.ends_with(".wisp") { "sexp" } else { "wisp" };
