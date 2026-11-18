@@ -1,0 +1,11 @@
+; Looks right, but violates its own spec: squaring 4e9 overflows i64.
+; M0 reports a structured overflow error at run time; M1 should reject it before running.
+
+(defn sum-sq [xs : (Vec i64)] -> i64
+  (:effects [])
+  (:ensures (>= result 0))
+  (fold + 0 (map (fn [x] (* x x)) xs)))
+
+(defn main [] -> i64
+  (:effects [])
+  (sum-sq [1 2 3 4000000000]))

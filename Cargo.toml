@@ -1,0 +1,18 @@
+[package]
+name = "warrant"
+version = "0.0.1"
+edition = "2021"
+description = "Warrant: a verified, parallel language for AI agents (M0 prototype)"
+license = "MIT OR Apache-2.0"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "warrant"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+debug = 1

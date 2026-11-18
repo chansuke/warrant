@@ -1,0 +1,13 @@
+; A function declared pure that sneaks in I/O through a helper.
+; Effects are checked transitively, so the leak is caught at the point of `print`.
+
+(defn log [msg : Str] -> Bool
+  (print msg))
+
+(defn add [a : i64 b : i64] -> i64
+  (:effects [])
+  (do (log "sneaky") (+ a b)))
+
+(defn main [] -> i64
+  (:effects [io])
+  (add 1 2))
