@@ -1,7 +1,12 @@
 defn merge [a : (Vec i64) b : (Vec i64)] -> (Vec i64)
   :effects []
   :requires (sorted? a) (sorted? b)
-  :ensures (sorted? result) (perm? result (concat a b))
+  :ensures (sorted? result)
+    perm? result : concat a b
+    = (len result) (+ (len a) (len b))
+    or (empty? result)
+      and (not (empty? a)) (= (get result 0) (get a 0))
+      and (not (empty? b)) (= (get result 0) (get b 0))
   if (empty? a) b
     if (empty? b) a
       if (<= (get a 0) (get b 0))
@@ -10,13 +15,15 @@ defn merge [a : (Vec i64) b : (Vec i64)] -> (Vec i64)
 
 defn msort [xs : (Vec i64)] -> (Vec i64)
   :effects []
-  :ensures (sorted? result) (perm? result xs)
+  :ensures (sorted? result) (perm? result xs) (= (len result) (len xs))
   let [n (len xs)]
     if (<= n 1) xs
       let [h (/ n 2)] : merge (msort (slice xs 0 h)) (msort (slice xs h n))
 
 defn gen [n : i64 seed : i64] -> (Vec i64)
   :effects []
+  :requires (>= n 0) (<= n 1000000) (>= seed 0) (<= seed 1000000)
+  :ensures (= (len result) n)
   map (fn [i] (mod (+ (* i 7919) seed) 10007)) (range n)
 
 defn main [] -> (Vec i64)

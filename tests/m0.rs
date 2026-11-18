@@ -7,6 +7,7 @@ const EXAMPLES: &[(&str, &str)] = &[
     ("msort", include_str!("../examples/msort.wrt")),
     ("sum_sq", include_str!("../examples/sum_sq.wrt")),
     ("effect_leak", include_str!("../examples/effect_leak.wrt")),
+    ("sum_sq_ok", include_str!("../examples/sum_sq_ok.wrt")),
 ];
 
 #[test]
@@ -48,6 +49,11 @@ fn msort_sorts_and_satisfies_its_contracts() {
 #[test]
 fn overflow_is_an_error_not_a_wrap() {
     assert_eq!(run(EXAMPLES[1].1).unwrap_err().0, "overflow");
+}
+
+#[test]
+fn bounded_sum_sq_runs_within_its_contract() {
+    assert_eq!(run(EXAMPLES[3].1).unwrap(), "16000014");
 }
 
 #[test]
