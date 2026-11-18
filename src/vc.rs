@@ -13,7 +13,7 @@
 use crate::ast::{Expr, ExprKind, FnDecl, FnIdx, LambdaParam, Module};
 use crate::builtin::Builtin;
 use crate::sexp::{quote_str, Pos};
-use crate::smt::{int_lit, quote_sym, sort, str_lit, vec_sort, I64_MIN, PRELUDE};
+use crate::smt::{int_lit, quote_sym, sort, str_lit, vec_sort, I64_MIN, MAX_LEN, PRELUDE};
 use crate::types::{Ty, TypeInfo};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -208,7 +208,7 @@ impl<'a> Exec<'a> {
             Ty::I64 => vec![format!("(in64 {})", term)],
             Ty::Vec(e) => {
                 let Some(s) = vec_sort(e) else { return Vec::new() };
-                let mut v = vec![format!("(<= 0 (len-{} {}))", s, term), format!("(in64 (len-{} {}))", s, term)];
+                let mut v = vec![format!("(<= 0 (len-{} {}))", s, term), format!("(<= (len-{} {}) {})", s, term, MAX_LEN)];
                 if **e == Ty::I64 {
                     let i = self.binder();
                     v.push(format!(

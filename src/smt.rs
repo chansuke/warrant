@@ -27,7 +27,11 @@ pub fn sort(t: &Ty) -> Option<&'static str> {
 }
 
 pub const I64_MIN: &str = "(- 9223372036854775808)";
-pub const I64_MAX: &str = "9223372036854775807";
+
+/// An upper bound on any vector's length: the interpreter cannot allocate
+/// more than `isize::MAX` bytes of `Value`s (D21). Two lengths added together
+/// still fit in i64.
+pub const MAX_LEN: i64 = 1 << 59;
 
 /// SMT-LIB has no negative literals: `-5` is `(- 5)`.
 pub fn int_lit(n: i64) -> String {
