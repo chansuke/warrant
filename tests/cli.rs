@@ -91,7 +91,9 @@ fn msort_proves_everything_but_perm() {
     let o = warrant(&["check", "examples/msort.wrt"]);
     assert!(o.stdout.contains(":proved 37 :failed 0 :unknown 0 :unsupported 2"), "{}", o.stdout);
     assert_eq!(o.stdout.matches("depends on perm?").count(), 2, "{}", o.stdout);
-    assert!(o.stdout.contains("(merge :effects [] :inferred [] :requires 2 :ensures 4 :level runtime-checked :termination assumed)"), "{}", o.stdout);
+    let merge = ":level runtime-checked :clauses (requires [proved proved] ensures [proved runtime-checked proved proved]) :termination assumed)";
+    assert!(o.stdout.contains(merge), "{}", o.stdout);
+    assert!(o.stdout.contains("(gen :effects [] :inferred [] :requires 4 :ensures 1 :level proved"), "{}", o.stdout);
 }
 
 /// The `(smt ...)` line's `:cached` count and `:reproved` list.
@@ -125,4 +127,31 @@ fn cache_reproves_only_what_an_edit_can_affect() {
     let contract_edit = base.replace("(:ensures (= (len result) n))", "(:ensures (>= (len result) n) (<= (len result) n))");
     let (_, reproved) = check("c3.wrt", &contract_edit);
     assert_eq!(reproved, "gen main", "a contract edit also re-proves the callers");
+}
+
+#[test]
+fn auto_erases_proved_clauses_and_keeps_the_rest() {
+    if !have_z3() {
+        return;
+    }
+    let o = warrant(&["run", "examples/msort.wrt", "--report"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert!(o.stdout.contains("(contracts auto :checked 2 :erased 12"), "{}", o.stdout);
+    for (mode, want) in [("runtime", "runtime :checked 14 :erased 0"), ("off", "off :checked 0 :erased 14")] {
+        let o = warrant(&["bench", "examples/msort.wrt", "-n", "1", "--contracts", mode]);
+        assert!(o.stdout.contains(&format!("(contracts {})", want)), "{}", o.stdout);
+    }
+    let o = warrant(&["bench", "examples/msort.wrt", "--contracts", "sometimes"]);
+    assert_eq!(o.code, 2, "{}", o.stdout);
+}
+
+#[test]
+fn auto_still_catches_an_ensures_it_could_not_prove() {
+    if !have_z3() {
+        return;
+    }
+    let src = "(defn bad-sort [xs : (Vec i64)] -> (Vec i64)\n  (:ensures (sorted? result))\n  (cons 99 xs))\n(defn main [] -> (Vec i64) (bad-sort [3 1 2]))\n";
+    let o = warrant(&["run", &source("bad_sort.wrt", src), "--no-cache"]);
+    assert_eq!(o.code, 1, "{}", o.stdout);
+    assert!(o.stdout.starts_with("(error :kind contract :msg \"ensures failed in bad-sort"), "{}", o.stdout);
 }

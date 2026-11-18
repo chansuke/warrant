@@ -70,15 +70,15 @@ pub fn ms(ns: u128) -> String {
     format!("{:.3}", ns as f64 / 1e6)
 }
 
-pub struct RunInfo {
+pub struct RunInfo<'a> {
     pub wall_ns: u128,
-    /// `runtime`, `auto` or `off`.
-    pub contracts: &'static str,
+    /// The mode and what it erased: `auto :checked 2 :erased 12 ...`.
+    pub contracts: &'a str,
     /// `None` when run with `--no-typecheck`.
     pub types_ns: Option<u128>,
 }
 
-pub fn report(file: &str, status: &str, parse_ns: u128, run: &RunInfo, p: &Profiler) -> String {
+pub fn report(file: &str, status: &str, parse_ns: u128, run: &RunInfo<'_>, p: &Profiler) -> String {
     let mut s = String::from("(report\n");
     s += &format!("  (file {})\n  (status {})\n", quote_str(file), status);
     let types = match run.types_ns {
