@@ -4,6 +4,7 @@
 
 pub mod ast;
 pub mod builtin;
+pub mod cache;
 pub mod diag;
 pub mod effects;
 pub mod eval;
