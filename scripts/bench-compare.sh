@@ -14,6 +14,10 @@ rounds=${3:-5}
 max_pct=${4:-10}
 
 root=$(git rev-parse --show-toplevel)
+if ! git -C "$root" cat-file -e "$base_rev:$file" 2>/dev/null; then
+  echo "(bench-compare :file \"$file\" :base \"$base_rev\" :status skipped :reason \"base has no $file\")"
+  exit 0
+fi
 work=$(mktemp -d)
 trap 'git -C "$root" worktree remove --force "$work/base" >/dev/null 2>&1 || true; rm -rf "$work"' EXIT
 
