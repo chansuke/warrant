@@ -1,0 +1,5 @@
+name = "warrant-formal"
+defaultTargets = ["WarrantFormal"]
+
+[[lean_lib]]
+name = "WarrantFormal"
