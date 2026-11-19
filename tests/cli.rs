@@ -245,3 +245,16 @@ fn a_proof_cache_shipped_with_the_source_is_not_trusted() {
     assert_eq!(code, Some(1), "{}", out);
     assert!(out.starts_with("(error :kind contract"), "{}", out);
 }
+
+#[test]
+fn report_breaks_time_down_by_function_clause_and_builtin() {
+    let o = warrant(&["run", "examples/msort.wrt", "--report", "--contracts", "runtime"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    let num = |line: &str, key: &str| -> f64 { line.split(key).nth(1).unwrap().split([' ', ')']).next().unwrap().parse().unwrap() };
+    let msort = o.stdout.lines().find(|l| l.trim_start().starts_with("(msort :calls")).expect("msort in hot");
+    assert!(num(msort, ":self-ms ") <= num(msort, ":incl-ms "), "{}", msort);
+    // Clause numbers match `check`: perm? is merge's ensures 1.
+    assert!(o.stdout.contains("(merge ensures 1 :checks 21587 "), "{}", o.stdout);
+    assert!(o.stdout.contains("(perm? 25586)"), "{}", o.stdout);
+    assert!(!o.stdout.contains("until M1"), "{}", o.stdout);
+}

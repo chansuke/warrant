@@ -64,8 +64,9 @@ impl Env {
 pub struct FnDef {
     pub name: String,
     pub params: Vec<String>,
-    pub requires: Vec<Sexp>,
-    pub ensures: Vec<Sexp>,
+    /// The clauses still checked at run time, each with its index in the source.
+    pub requires: Vec<(usize, Sexp)>,
+    pub ensures: Vec<(usize, Sexp)>,
     /// `None` = no clause (unchecked in M0); `Some([])` = pure.
     pub effects: Option<Vec<String>>,
     pub budget: Option<Budget>,
@@ -124,7 +125,7 @@ pub fn parse_params(v: &[Sexp]) -> R<Vec<String>> {
 
 impl Program {
     pub fn new(m: &Module, checks: &Checks) -> Program {
-        let kept = |cs: &[Clause], keep: &[bool]| cs.iter().zip(keep).filter(|(_, k)| **k).map(|(c, _)| c.src.clone()).collect();
+        let kept = |cs: &[Clause], keep: &[bool]| cs.iter().zip(keep).enumerate().filter(|(_, (_, k))| **k).map(|(i, (c, _))| (i, c.src.clone())).collect();
         let fns = m
             .fns
             .iter()
@@ -362,13 +363,12 @@ impl<'p> Interp<'p> {
         }
         self.depth += 1;
         self.prof.enter(&def.name, self.depth);
-        let t0 = self.prof.enabled.then(Instant::now);
         self.effect_stack.push(def.clone());
         let res = self.call_body(&def, &env);
         self.effect_stack.pop();
         self.depth -= 1;
-        if let Some(t) = t0 {
-            self.prof.exit(&def.name, t.elapsed().as_nanos());
+        if self.prof.enabled {
+            self.prof.exit(&def.name);
         }
         res.map_err(|mut e| {
             if e.trace.len() < 16 {
@@ -379,25 +379,27 @@ impl<'p> Interp<'p> {
     }
 
     fn call_body(&mut self, def: &FnDef, env: &Env) -> R<Value> {
-        for r in &def.requires {
-            self.check_contract(def, "requires", r, env)?;
+        for (i, r) in &def.requires {
+            self.check_contract(def, "requires", *i, r, env)?;
         }
         let v = self.eval_seq(&def.body, env)?;
         if !def.ensures.is_empty() {
             let env2 = env.bind("result".into(), v.clone());
-            for en in &def.ensures {
-                self.check_contract(def, "ensures", en, &env2)?;
+            for (i, en) in &def.ensures {
+                self.check_contract(def, "ensures", *i, en, &env2)?;
             }
         }
         Ok(v)
     }
 
-    fn check_contract(&mut self, def: &FnDef, which: &str, e: &Sexp, env: &Env) -> R<()> {
+    fn check_contract(&mut self, def: &FnDef, which: &'static str, index: usize, e: &Sexp, env: &Env) -> R<()> {
         let t0 = self.prof.enabled.then(Instant::now);
         self.prof.contract_checks += 1;
         let r = self.eval(e, env);
         if let Some(t) = t0 {
-            self.prof.contract_ns += t.elapsed().as_nanos();
+            let ns = t.elapsed().as_nanos();
+            self.prof.contract_ns += ns;
+            self.prof.clause(&def.name, which, index, ns);
         }
         match r? {
             Value::Bool(true) => Ok(()),
@@ -422,7 +424,7 @@ impl<'p> Interp<'p> {
 
     fn builtin(&mut self, b: Builtin, args: Vec<Value>) -> R<Value> {
         use Builtin as B;
-        self.prof.builtin_calls += 1;
+        self.prof.builtin(b);
         let name = b.name();
         let ovf = || RtError::new("overflow", format!("i64 overflow in ({} ...)", name));
         match b {
