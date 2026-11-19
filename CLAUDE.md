@@ -33,7 +33,7 @@ target/release/warrant spec-diff OLD.wrt NEW.wrt           # 仕様の弱体化�
 | `src/verify.rs` | VC を並列にソルバに渡し（キャッシュ経由）、`(smt ...)` の集計を作る |
 | `src/contracts.rs` | 節ごとの検証レベル（proved / runtime-checked）と、モードから実行時に検査する節を決める `Checks` |
 | `src/specdiff.rs` | 仕様差分ガード。節ごとの変更と判定（weakened / strengthened / refined / new）、精緻化の SMT 証明 |
-| `src/cache.rs` | VC 単位の証明キャッシュ（`.warrant/cache/`、キーはソルバの fingerprint とスクリプト） |
+| `src/cache.rs` | VC 単位の証明キャッシュ（既定 `~/.cache/warrant/proofs`、キーはソルバの fingerprint とスクリプト） |
 | `src/eval.rs` | `Program::new`（`Module` から作る）、`Interp`（評価、契約、エフェクト、組み込み関数） |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |
 | `src/main.rs` | CLI。大きいスタックのスレッドで実行し、終了コードを返す |

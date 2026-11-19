@@ -52,6 +52,8 @@ AIエージェントが主に実装を書き、**人間はボトルネックに�
 | D20 | `--no-typecheck` は型検査だけを省略し、静的なエフェクト検査は `run` / `bench` の前に必ず行う | エフェクトは権限と安全性の仕組み（D4）で、型の都合で外せないほうがよい。検査は 0.02 ms 程度で、省略する理由がない |
 | D21 | SMT ではベクタの長さを `0 <= len <= 2^59` と仮定する | インタプリタは `isize::MAX` バイトを超えて `Value`（24 バイト）を確保できないので、実際の上限は約 3.8×10^17。長さ2つの和が i64 に収まり、`(+ (len a) (len b))` のオーバーフローを証明できる。上限が実装と矛盾しないことを `eval.rs` のテストで確かめる |
 | D22 | spec-diff の精緻化の証明は、古い契約を持ち新しい関数を呼ぶだけの合成関数 `%refines-f` を VC 生成器にかけて行う | 呼び出しの requires の VC が「古い requires ⇒ 新しい requires」、ensures の VC が「古い requires ∧ 新しい ensures ⇒ 古い ensures」になる。SMT の符号化を2つ持たずに済む。節が呼ぶ補助関数は新しい版で解決する（補助関数の契約も変わった場合は近似） |
+| D23 | 証明キャッシュの既定の置き場所は `$XDG_CACHE_HOME/warrant/proofs`（無ければ `~/.cache/warrant/proofs`）。プロジェクト内の `.warrant/cache/` は `--cache-dir` で明示したときだけ使う（D15 の置き場所を変更） | キャッシュの proved は実行時検査を外す根拠になる。ソースと一緒に配られたキャッシュを読むと、偽のエントリで契約違反が素通りする（再現テストあり） |
+| D24 | 括弧の入れ子は 1000 段まで。超えたら構文エラー（終了コード 2） | 型検査・VC 生成・評価はどれも木を再帰でたどる。制限がないと 100 万段の入力でスタックが溢れてプロセスごと落ちる |
 
 ## 4. 言語（M0 時点）
 
@@ -94,7 +96,7 @@ warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 
 `0` 成功 / `1` 実行時・契約・エフェクト違反、check 失敗 / `2` 構文・ロード・使い方 / `3` 性能予算超過
 
-`check` は型検査が通れば VC を生成して Z3 で証明する。出力は `(smt :status ok|failed :vcs N :proved P :failed F :unknown U :unsupported X :ms T :issues (...))` で、証明できなかった VC を `(vc :fn F :kind K :at (line L col C) :status failed :counterexample (xs [...]))` の形で列挙する。VC は `--jobs` 個（既定は論理コア数）の z3 を並列に動かして解く。結果は VC ごとに `.warrant/cache/` にキャッシュし、`:cached C` と、今回ソルバにかけた関数 `:reproved (...)`、遅い順の3件 `:slowest ((fn kind ms) ...)` を出す。VC が1つでも failed なら終了コード 1。unknown（タイムアウト、既定 2 秒）と unsupported（`perm?` など）は失敗にしない。z3 が無ければ `(smt :status unavailable ...)`。再帰する関数は `:termination assumed`（停止性は証明しない）
+`check` は型検査が通れば VC を生成して Z3 で証明する。出力は `(smt :status ok|failed :vcs N :proved P :failed F :unknown U :unsupported X :ms T :issues (...))` で、証明できなかった VC を `(vc :fn F :kind K :at (line L col C) :status failed :counterexample (xs [...]))` の形で列挙する。VC は `--jobs` 個（既定は論理コア数）の z3 を並列に動かして解く。結果は VC ごとにユーザーのキャッシュディレクトリ（既定 `~/.cache/warrant/proofs`、D23）にキャッシュし、`:cached C` と、今回ソルバにかけた関数 `:reproved (...)`、遅い順の3件 `:slowest ((fn kind ms) ...)` を出す。VC が1つでも failed なら終了コード 1。unknown（タイムアウト、既定 2 秒）と unsupported（`perm?` など）は失敗にしない。z3 が無ければ `(smt :status unavailable ...)`。再帰する関数は `:termination assumed`（停止性は証明しない）
 
 `run` と `bench` の既定は `--contracts auto`。実行前に VC を証明し（キャッシュ経由）、証明できた節は実行時に検査しない。`ensures` の節は、節そのものと節の式の境界・オーバーフローの VC がすべて proved なら省く。`requires` の節は、すべての呼び出し箇所で VC が proved なら省く。値として渡される関数と `main` の `requires` は常に検査する。`--no-contracts` は `--contracts off` と同じ。出力は `(contracts auto :checked 2 :erased 12 :verify-ms 1.3)`。`check` の関数ごとの行は `:level proved|runtime-checked|unspecified :clauses (requires [...] ensures [...])`
 
