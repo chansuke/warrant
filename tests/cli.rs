@@ -174,3 +174,14 @@ fn spec_diff_blocks_weakened_contracts_and_lists_body_changes() {
     let o = warrant(&["spec-diff", &old]);
     assert_eq!(o.code, 2);
 }
+
+#[test]
+fn absurdly_deep_input_is_a_parse_error_not_a_crash() {
+    let n = 1_000_000;
+    let src = format!("(defn main [] -> i64 {}0{})", "(+ 1 ".repeat(n), ")".repeat(n + 1));
+    for cmd in ["check", "run", "fmt"] {
+        let o = warrant(&[cmd, &source("deep.wrt", &src), "--no-cache"]);
+        assert_eq!(o.code, 2, "{}: {}", cmd, o.stdout);
+        assert!(o.stdout.contains("nesting deeper than 1000 levels"), "{}", o.stdout);
+    }
+}

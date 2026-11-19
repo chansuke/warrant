@@ -11,7 +11,7 @@
 //! - Inside brackets `( )` and `[ ]` the text is plain S-expression syntax.
 //! - Brackets must close on the line they open. Indent with spaces only.
 
-use crate::sexp::{flat, is_clause, ParseError, Parser, Sexp, SpanTree, WIDTH};
+use crate::sexp::{flat, is_clause, nesting, nesting_error, ParseError, Parser, Sexp, SpanTree, MAX_NESTING, WIDTH};
 
 // ---------- printing ----------
 
@@ -144,6 +144,9 @@ pub fn parse_spanned(src: &str) -> Result<(Vec<Sexp>, Vec<SpanTree>), ParseError
                 return Err(ParseError::new(no, indent + 1, "`.` must be followed by items"));
             }
         }
+        if items.iter().filter(|x| x.0 == Sexp::Sym(":".into())).count() >= MAX_NESTING {
+            return Err(nesting_error(no, indent + 1));
+        }
         let items = fold_colon(items).map_err(|m| ParseError::new(no, indent + 1, m))?;
         lines.push(Line { indent, items, splice, no });
     }
@@ -155,9 +158,13 @@ pub fn parse_spanned(src: &str) -> Result<(Vec<Sexp>, Vec<SpanTree>), ParseError
         return Err(ParseError::new(lines[0].no, 1, "first form must not be indented"));
     }
     let mut i = 0;
-    block(&lines, &mut i, &mut out)?;
+    block(&lines, &mut i, &mut out, 0)?;
     if i < lines.len() {
         return Err(ParseError::new(lines[i].no, 1, "inconsistent indentation"));
+    }
+    // Lines, `:` and indentation each nest; only the whole form shows the total.
+    if let Some((_, s)) = out.iter().find(|(e, _)| nesting(e) > MAX_NESTING) {
+        return Err(nesting_error(s.at.line, s.at.col));
     }
     Ok(out.into_iter().unzip())
 }
@@ -178,8 +185,11 @@ fn fold_colon(mut items: Vec<Item>) -> Result<Vec<Item>, String> {
     }
 }
 
-fn block(lines: &[Line], i: &mut usize, out: &mut Vec<Item>) -> Result<(), ParseError> {
+fn block(lines: &[Line], i: &mut usize, out: &mut Vec<Item>, level: usize) -> Result<(), ParseError> {
     let base = lines[*i].indent;
+    if level == MAX_NESTING {
+        return Err(nesting_error(lines[*i].no, base + 1));
+    }
     while *i < lines.len() {
         let ind = lines[*i].indent;
         if ind < base {
@@ -192,7 +202,7 @@ fn block(lines: &[Line], i: &mut usize, out: &mut Vec<Item>) -> Result<(), Parse
         *i += 1;
         let mut children = Vec::new();
         if *i < lines.len() && lines[*i].indent > base {
-            block(lines, i, &mut children)?;
+            block(lines, i, &mut children, level + 1)?;
         }
         let l = &lines[idx];
         if l.splice {
@@ -255,6 +265,19 @@ mod tests {
         assert_eq!(at(fold), (3, 3));
         assert_eq!(at(&fold.kids[3]), (3, 14));
         assert_eq!(at(&fold.kids[3].kids[2]), (3, 20));
+    }
+
+    #[test]
+    fn nesting_by_indentation_colons_or_both_is_limited() {
+        let indented = |n: usize| (0..n).map(|i| format!("{}f\n", " ".repeat(i))).collect::<String>();
+        assert!(parse(&indented(MAX_NESTING)).is_ok());
+        assert!(parse(&indented(MAX_NESTING + 1)).is_err());
+        let colons = |n: usize| "f : ".repeat(n) + "x";
+        assert!(parse(&colons(MAX_NESTING - 1)).is_ok());
+        assert!(parse(&colons(MAX_NESTING)).is_err());
+        let half = MAX_NESTING / 2 + 1;
+        let e = parse(&format!("{}{}", indented(half), " ".repeat(half) + &colons(half))).unwrap_err();
+        assert_eq!((e.line, e.col), (1, 1));
     }
 
     #[test]

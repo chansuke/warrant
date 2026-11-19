@@ -6,6 +6,10 @@ use std::fmt;
 /// Target line width for pretty printers.
 pub const WIDTH: usize = 80;
 
+/// Deepest bracket nesting a program may use. Every later pass recurses over
+/// the tree, so deeper input would overflow the stack instead of failing.
+pub const MAX_NESTING: usize = 1000;
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Sexp {
     Int(i64),
@@ -203,6 +207,7 @@ pub fn atom(s: &str, line: usize, col: usize) -> Result<Sexp, ParseError> {
 pub struct Parser<'a> {
     lex: Lexer<'a>,
     peeked: Option<(Tok, usize, usize)>,
+    depth: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -210,7 +215,7 @@ impl<'a> Parser<'a> {
         Self::new_at(src, 1, 1)
     }
     pub fn new_at(src: &'a str, line: usize, col: usize) -> Self {
-        Parser { lex: Lexer::new_at(src, line, col), peeked: None }
+        Parser { lex: Lexer::new_at(src, line, col), peeked: None, depth: 0 }
     }
 
     fn peek(&mut self) -> Result<Option<(Tok, usize, usize)>, ParseError> {
@@ -230,6 +235,12 @@ impl<'a> Parser<'a> {
     pub fn parse_expr(&mut self) -> Result<Option<(Sexp, SpanTree)>, ParseError> {
         let Some((tok, l, c)) = self.next()? else { return Ok(None) };
         let mut span = SpanTree::leaf(l, c);
+        if matches!(tok, Tok::LParen | Tok::LBrack) {
+            if self.depth == MAX_NESTING {
+                return Err(nesting_error(l, c));
+            }
+            self.depth += 1;
+        }
         let e = match tok {
             Tok::LParen => Sexp::List(self.parse_seq(Tok::RParen, &mut span)?),
             Tok::LBrack => Sexp::Vector(self.parse_seq(Tok::RBrack, &mut span)?),
@@ -239,6 +250,9 @@ impl<'a> Parser<'a> {
             Tok::Str(s) => Sexp::Str(s),
             Tok::Atom(a) => atom(&a, l, c)?,
         };
+        if matches!(e, Sexp::List(_) | Sexp::Vector(_)) {
+            self.depth -= 1;
+        }
         Ok(Some((e, span)))
     }
 
@@ -264,6 +278,23 @@ impl<'a> Parser<'a> {
             }
         }
     }
+}
+
+pub fn nesting_error(line: usize, col: usize) -> ParseError {
+    ParseError::new(line, col, format!("nesting deeper than {} levels", MAX_NESTING))
+}
+
+/// Bracket depth of `e`, without recursion.
+pub fn nesting(e: &Sexp) -> usize {
+    let mut deepest = 0;
+    let mut stack = vec![(e, 0)];
+    while let Some((e, d)) = stack.pop() {
+        if let Sexp::List(v) | Sexp::Vector(v) = e {
+            deepest = deepest.max(d + 1);
+            stack.extend(v.iter().map(|x| (x, d + 1)));
+        }
+    }
+    deepest
 }
 
 pub fn parse_all(src: &str) -> Result<Vec<Sexp>, ParseError> {
@@ -383,6 +414,15 @@ fn pp(e: &Sexp, indent: usize, out: &mut String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nesting_past_the_limit_is_a_parse_error_at_the_bracket() {
+        let deep = |n: usize| "(".repeat(n) + &")".repeat(n);
+        assert_eq!(nesting(&parse_all(&deep(MAX_NESTING)).unwrap()[0]), MAX_NESTING);
+        let e = parse_all(&deep(MAX_NESTING + 1)).unwrap_err();
+        assert_eq!((e.line, e.col), (1, MAX_NESTING + 1));
+        assert!(parse_all(&"[".repeat(MAX_NESTING + 1)).is_err());
+    }
 
     #[test]
     fn parses_atoms_and_nesting() {
