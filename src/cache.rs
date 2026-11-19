@@ -116,6 +116,32 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_writers_never_expose_a_partial_entry() {
+        let c = temp_cache("race");
+        let script = "x".repeat(1 << 20);
+        let failed = Outcome::Failed { model: vec![("xs".into(), "[1 2 3]".into())] };
+        std::thread::scope(|s| {
+            for w in 0..8 {
+                let (c, script, failed) = (&c, &script, &failed);
+                s.spawn(move || {
+                    for _ in 0..40 {
+                        if w % 2 == 0 {
+                            c.put("z3", script, failed);
+                        } else if let Some(o) = c.get("z3", script) {
+                            assert_eq!(&o, failed);
+                        } else {
+                            assert!(!c.path("z3", script).exists() || c.get("z3", script).is_some(), "a written entry read as a miss");
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(c.get("z3", &script), Some(failed));
+        let leftovers = std::fs::read_dir(&c.dir).unwrap().filter(|e| e.as_ref().unwrap().path().extension() != Some("sexp".as_ref()));
+        assert_eq!(leftovers.count(), 0, "temporary files are renamed away");
+    }
+
+    #[test]
     fn a_different_fingerprint_or_a_colliding_file_is_a_miss() {
         let c = temp_cache("miss");
         c.put("z3 -t:2000", "s", &Outcome::Proved);
