@@ -7,6 +7,7 @@
 //! callee or closure. Functions with no `:effects` clause are unchecked in M0.
 //! Integer arithmetic is checked: overflow is an error, never a wrap.
 
+use crate::builtin::Builtin;
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str, Sexp};
 use std::collections::HashMap;
@@ -23,7 +24,7 @@ pub enum Value {
     Vec(Rc<Vec<Value>>),
     Closure(Rc<Closure>),
     Func(Rc<FnDef>),
-    Builtin(&'static str),
+    Builtin(Builtin),
 }
 
 pub struct Closure {
@@ -205,11 +206,6 @@ pub fn load(forms: &[Sexp]) -> R<Program> {
     Ok(Program { fns, order })
 }
 
-pub const BUILTINS: &[&str] = &[
-    "+", "-", "*", "/", "mod", "=", "<", "<=", ">", ">=", "not", "len", "get", "slice", "rest",
-    "concat", "cons", "empty?", "range", "vec", "map", "fold", "filter", "sorted?", "perm?", "print",
-];
-
 pub fn type_name(v: &Value) -> &'static str {
     match v {
         Value::Int(_) => "i64",
@@ -228,7 +224,7 @@ pub fn show(v: &Value) -> String {
         Value::Vec(xs) => format!("[{}]", xs.iter().map(show).collect::<Vec<_>>().join(" ")),
         Value::Closure(_) => "#<fn>".into(),
         Value::Func(d) => format!("#<fn {}>", d.name),
-        Value::Builtin(b) => format!("#<builtin {}>", b),
+        Value::Builtin(b) => format!("#<builtin {}>", b.name()),
     }
 }
 
@@ -290,7 +286,7 @@ impl<'p> Interp<'p> {
         if let Some(f) = self.prog.fns.get(s) {
             return Ok(Value::Func(f.clone()));
         }
-        if let Some(b) = BUILTINS.iter().find(|b| **b == s) {
+        if let Some(b) = Builtin::from_name(s) {
             return Ok(Value::Builtin(b));
         }
         Err(RtError::new("unbound", format!("unbound symbol `{}`", s)))
@@ -406,7 +402,7 @@ impl<'p> Interp<'p> {
                 let body = c.body.clone();
                 self.eval_seq(&body, &env)
             }
-            Value::Builtin(name) => self.builtin(name, args),
+            Value::Builtin(b) => self.builtin(*b, args),
             o => Err(RtError::new("type", format!("cannot call a value of type {}", type_name(o)))),
         }
     }
@@ -487,19 +483,21 @@ impl<'p> Interp<'p> {
         Ok(())
     }
 
-    fn builtin(&mut self, name: &'static str, args: Vec<Value>) -> R<Value> {
+    fn builtin(&mut self, b: Builtin, args: Vec<Value>) -> R<Value> {
+        use Builtin as B;
         self.prof.builtin_calls += 1;
+        let name = b.name();
         let ovf = || RtError::new("overflow", format!("i64 overflow in ({} ...)", name));
-        match name {
-            "+" | "*" => {
-                let mut acc: i64 = if name == "+" { 0 } else { 1 };
+        match b {
+            B::Add | B::Mul => {
+                let mut acc: i64 = if b == B::Add { 0 } else { 1 };
                 for a in &args {
                     let x = int(a, name)?;
-                    acc = if name == "+" { acc.checked_add(x) } else { acc.checked_mul(x) }.ok_or_else(ovf)?;
+                    acc = if b == B::Add { acc.checked_add(x) } else { acc.checked_mul(x) }.ok_or_else(ovf)?;
                 }
                 Ok(Value::Int(acc))
             }
-            "-" => {
+            B::Sub => {
                 let Some(first) = args.first() else {
                     return Err(RtError::new("arity", "- expects at least 1 arg"));
                 };
@@ -512,46 +510,46 @@ impl<'p> Interp<'p> {
                 }
                 Ok(Value::Int(acc))
             }
-            "/" | "mod" => {
+            B::Div | B::Mod => {
                 arity(name, &args, 2)?;
-                let (a, b) = (int(&args[0], name)?, int(&args[1], name)?);
-                if b == 0 {
-                    return Err(RtError::new("div-zero", format!("({} {} 0)", name, a)));
+                let (x, y) = (int(&args[0], name)?, int(&args[1], name)?);
+                if y == 0 {
+                    return Err(RtError::new("div-zero", format!("({} {} 0)", name, x)));
                 }
-                if name == "/" { a.checked_div(b) } else { a.checked_rem_euclid(b) }
+                if b == B::Div { x.checked_div(y) } else { x.checked_rem_euclid(y) }
                     .map(Value::Int)
                     .ok_or_else(ovf)
             }
-            "=" => {
+            B::Eq => {
                 arity(name, &args, 2)?;
                 Ok(Value::Bool(values_eq(&args[0], &args[1])))
             }
-            "<" | "<=" | ">" | ">=" => {
+            B::Lt | B::Le | B::Gt | B::Ge => {
                 arity(name, &args, 2)?;
-                let (a, b) = (int(&args[0], name)?, int(&args[1], name)?);
-                Ok(Value::Bool(match name {
-                    "<" => a < b,
-                    "<=" => a <= b,
-                    ">" => a > b,
-                    _ => a >= b,
+                let (x, y) = (int(&args[0], name)?, int(&args[1], name)?);
+                Ok(Value::Bool(match b {
+                    B::Lt => x < y,
+                    B::Le => x <= y,
+                    B::Gt => x > y,
+                    _ => x >= y,
                 }))
             }
-            "not" => {
+            B::Not => {
                 arity(name, &args, 1)?;
                 match &args[0] {
-                    Value::Bool(b) => Ok(Value::Bool(!b)),
+                    Value::Bool(x) => Ok(Value::Bool(!x)),
                     o => Err(RtError::new("type", format!("not expects bool, got {}", type_name(o)))),
                 }
             }
-            "len" => {
+            B::Len => {
                 arity(name, &args, 1)?;
                 Ok(Value::Int(vecv(&args[0], name)?.len() as i64))
             }
-            "empty?" => {
+            B::IsEmpty => {
                 arity(name, &args, 1)?;
                 Ok(Value::Bool(vecv(&args[0], name)?.is_empty()))
             }
-            "get" => {
+            B::Get => {
                 arity(name, &args, 2)?;
                 let (v, i) = (vecv(&args[0], name)?, int(&args[1], name)?);
                 if i < 0 || i as usize >= v.len() {
@@ -559,18 +557,18 @@ impl<'p> Interp<'p> {
                 }
                 Ok(v[i as usize].clone())
             }
-            "slice" => {
+            B::Slice => {
                 arity(name, &args, 3)?;
                 let v = vecv(&args[0], name)?;
-                let (a, b) = (int(&args[1], name)?, int(&args[2], name)?);
-                if a < 0 || b < a || b as usize > v.len() {
-                    return Err(RtError::new("bounds", format!("(slice v {} {}) on vec of len {}", a, b, v.len())));
+                let (lo, hi) = (int(&args[1], name)?, int(&args[2], name)?);
+                if lo < 0 || hi < lo || hi as usize > v.len() {
+                    return Err(RtError::new("bounds", format!("(slice v {} {}) on vec of len {}", lo, hi, v.len())));
                 }
-                let out = v[a as usize..b as usize].to_vec();
+                let out = v[lo as usize..hi as usize].to_vec();
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }
-            "rest" => {
+            B::Rest => {
                 arity(name, &args, 1)?;
                 let v = vecv(&args[0], name)?;
                 if v.is_empty() {
@@ -580,16 +578,16 @@ impl<'p> Interp<'p> {
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }
-            "concat" => {
+            B::Concat => {
                 arity(name, &args, 2)?;
-                let (a, b) = (vecv(&args[0], name)?, vecv(&args[1], name)?);
-                let mut out = Vec::with_capacity(a.len() + b.len());
-                out.extend(a.iter().cloned());
-                out.extend(b.iter().cloned());
+                let (xs, ys) = (vecv(&args[0], name)?, vecv(&args[1], name)?);
+                let mut out = Vec::with_capacity(xs.len() + ys.len());
+                out.extend(xs.iter().cloned());
+                out.extend(ys.iter().cloned());
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }
-            "cons" => {
+            B::Cons => {
                 arity(name, &args, 2)?;
                 let v = vecv(&args[1], name)?;
                 let mut out = Vec::with_capacity(v.len() + 1);
@@ -598,7 +596,7 @@ impl<'p> Interp<'p> {
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }
-            "range" => {
+            B::Range => {
                 arity(name, &args, 1)?;
                 let n = int(&args[0], name)?;
                 if n < 0 {
@@ -608,18 +606,18 @@ impl<'p> Interp<'p> {
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }
-            "vec" => {
+            B::Vec => {
                 self.prof.vec_alloc(args.len());
                 Ok(Value::Vec(Rc::new(args)))
             }
-            "map" | "filter" => {
+            B::Map | B::Filter => {
                 arity(name, &args, 2)?;
                 let v = vecv(&args[1], name)?;
                 let f = &args[0];
                 let mut out = Vec::with_capacity(v.len());
                 for x in v.iter() {
                     let r = self.apply(f, vec![x.clone()])?;
-                    if name == "map" {
+                    if b == B::Map {
                         out.push(r);
                     } else {
                         match r {
@@ -632,7 +630,7 @@ impl<'p> Interp<'p> {
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }
-            "fold" => {
+            B::Fold => {
                 arity(name, &args, 3)?;
                 let v = vecv(&args[2], name)?;
                 let mut acc = args[1].clone();
@@ -641,7 +639,7 @@ impl<'p> Interp<'p> {
                 }
                 Ok(acc)
             }
-            "sorted?" => {
+            B::IsSorted => {
                 arity(name, &args, 1)?;
                 let v = vecv(&args[0], name)?;
                 let mut prev: Option<i64> = None;
@@ -654,7 +652,7 @@ impl<'p> Interp<'p> {
                 }
                 Ok(Value::Bool(true))
             }
-            "perm?" => {
+            B::IsPerm => {
                 arity(name, &args, 2)?;
                 let to_ints = |v: &Value| -> R<Vec<i64>> {
                     let mut out = vecv(v, name)?.iter().map(|x| int(x, name)).collect::<R<Vec<i64>>>()?;
@@ -663,7 +661,7 @@ impl<'p> Interp<'p> {
                 };
                 Ok(Value::Bool(to_ints(&args[0])? == to_ints(&args[1])?))
             }
-            "print" => {
+            B::Print => {
                 self.check_effect("io", "print")?;
                 let s: Vec<String> = args
                     .iter()
@@ -675,7 +673,6 @@ impl<'p> Interp<'p> {
                 println!("{}", s.join(" "));
                 Ok(Value::Bool(true))
             }
-            _ => Err(RtError::new("unbound", format!("builtin `{}` not implemented", name))),
         }
     }
 }
