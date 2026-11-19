@@ -1,0 +1,15 @@
+; sum_sq.wrt with the ranges stated, so `warrant check` proves it cannot overflow.
+; It recurses instead of folding: a fold's accumulator has no invariant the prover
+; can use, so (fold + 0 ...) can never be shown to stay in range.
+
+(defn sum-sq [xs : (Vec i64)] -> i64
+  (:effects [])
+  (:requires (<= (len xs) 1000000)
+             (all? (fn [x] (and (>= x -1000000) (<= x 1000000))) xs))
+  (:ensures (>= result 0) (<= result (* (len xs) 1000000000000)))
+  (if (empty? xs) 0
+    (+ (* (get xs 0) (get xs 0)) (sum-sq (rest xs)))))
+
+(defn main [] -> i64
+  (:effects [])
+  (sum-sq [1 2 3 4000]))
