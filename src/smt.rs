@@ -42,8 +42,19 @@ pub fn int_lit(n: i64) -> String {
     }
 }
 
+/// A quoted SMT symbol. Warrant symbols may contain `|` and `\`, which a
+/// quoted symbol cannot, so they are escaped; the escape keeps distinct names
+/// distinct.
 pub fn quote_sym(name: &str) -> String {
-    format!("|{}|", name.replace('|', "_"))
+    let mut out = String::from("|");
+    for c in name.chars() {
+        match c {
+            '%' | '|' | '\\' => out.push_str(&format!("%{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('|');
+    out
 }
 
 pub fn str_lit(s: &str) -> String {
@@ -51,6 +62,8 @@ pub fn str_lit(s: &str) -> String {
     for c in s.chars() {
         match c {
             '"' => out.push_str("\"\""),
+            // Z3 reads `\u{..}` in a literal as an escape, so a backslash is one too.
+            '\\' => out.push_str("\\u{5c}"),
             ' '..='~' => out.push(c),
             c => out.push_str(&format!("\\u{{{:x}}}", c as u32)),
         }
@@ -84,6 +97,24 @@ pub const PRELUDE: &str = r#"(declare-datatype VI ((mk-VI (arr-VI (Array Int Int
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn distinct_names_stay_distinct_symbols() {
+        let names = ["a|b", "a_b", "a%7cb", "a\\b", "a%5cb", "x 1"];
+        let syms: std::collections::BTreeSet<String> = names.iter().map(|n| quote_sym(n)).collect();
+        assert_eq!(syms.len(), names.len());
+        assert!(syms.iter().all(|s| !s[1..s.len() - 1].contains(['|', '\\'])));
+    }
+
+    #[test]
+    fn string_literals_mean_what_the_interpreter_means() {
+        let Some(z) = crate::solver::Z3::find(2000) else { return };
+        use crate::solver::{Outcome, Solver};
+        for (lit, len) in [("\\u{41}", 6), ("a\"b", 3), ("\\", 1), ("é", 1)] {
+            let script = format!("(assert (not (= (str.len {}) {})))", str_lit(lit), len);
+            assert_eq!(z.check(&script, &[]).unwrap(), Outcome::Proved, "{:?}", lit);
+        }
+    }
 
     #[test]
     fn truncating_division_matches_rust() {

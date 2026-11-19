@@ -185,3 +185,23 @@ fn absurdly_deep_input_is_a_parse_error_not_a_crash() {
         assert!(o.stdout.contains("nesting deeper than 1000 levels"), "{}", o.stdout);
     }
 }
+
+#[test]
+fn names_and_strings_with_smt_escape_characters_are_not_proved_wrongly() {
+    if !have_z3() {
+        return;
+    }
+    let cases = [
+        ("pipe.wrt", "(defn f [a|b : i64 a_b : i64] -> i64 (:ensures (= result a_b)) a|b)\n(defn main [] -> i64 (f 1 2))\n"),
+        ("bslash.wrt", "(defn f [] -> Str (:ensures (= result \"A\")) \"\\\\u{41}\")\n(defn main [] -> Str (f))\n"),
+    ];
+    for (name, src) in cases {
+        let path = source(name, src);
+        let o = warrant(&["check", &path, "--no-cache"]);
+        assert_eq!(o.code, 1, "{}", o.stdout);
+        assert!(o.stdout.contains(":kind ensures :clause 0") && o.stdout.contains(":status failed"), "{}", o.stdout);
+        let o = warrant(&["run", &path, "--no-cache"]);
+        assert_eq!(o.code, 1, "{}", o.stdout);
+        assert!(o.stdout.starts_with("(error :kind contract"), "{}", o.stdout);
+    }
+}
