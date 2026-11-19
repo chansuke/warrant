@@ -14,6 +14,10 @@ target/release/warrant check examples/msort.wrt            # z3 が PATH にあ�
 target/release/warrant fmt   examples/msort.wrt            # → Wisp 表示
 target/release/warrant bench examples/msort.wrt -n 10      # 既定は --contracts auto
 target/release/warrant spec-diff OLD.wrt NEW.wrt           # 仕様の弱体化があれば終了コード 1
+scripts/bench-compare.sh main                              # main と交互に bench を取り、退行なら終了コード 1
+scripts/flamegraph.sh examples/msort.wrt out.svg           # perf と inferno が必要
+formal/tla/check.sh                                        # TLC で仕様を検査（jar は検証して取得）
+formal/lean/check.sh                                       # Lean の証明をビルドし、sorry がないことを確かめる
 ```
 
 ## コード構成
@@ -38,6 +42,10 @@ target/release/warrant spec-diff OLD.wrt NEW.wrt           # 仕様の弱体化�
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |
 | `src/main.rs` | CLI。大きいスタックのスレッドで実行し、終了コードを返す |
 | `tests/m0.rs` | 例題の往復・実行・エラー種別の統合テスト |
+| `tests/cli.rs` | バイナリを動かす出力形式・終了コードのテスト |
+| `tests/properties.rs` | ランダムな正規形の往復、フロントエンドが panic しないこと |
+| `tests/soundness.rs` | proved な関数が実行時に失敗しないことの差分テスト（z3 が必要） |
+| `formal/` | Lean（契約省略の健全性）と TLA+（証明キャッシュ、並列 discharge） |
 | `examples/` | `msort`（目標プログラム）、`sum_sq`（オーバーフロー）、`effect_leak`（エフェクト漏れ） |
 
 ## 守るべき不変条件
@@ -52,6 +60,7 @@ target/release/warrant spec-diff OLD.wrt NEW.wrt           # 仕様の弱体化�
 ## 作業の進め方
 
 - 小さく分けてコミットする。各コミットで `cargo test --release` と `cargo clippy` が通る状態にする
+- コミットメッセージは Conventional Commits（`feat(vc): ...`、`fix:`、`docs:`、`test:`、`perf:`、`refactor:`、`chore:`、`ci:`）で1行
 - 性能に関わる変更は、前後で `warrant bench examples/msort.wrt -n 10` を取り、コミットメッセージに median を書く
 - 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（番号 D13 から）
 - 新しい組み込み関数: `builtin.rs` の `Builtin` に足し、`eval.rs` の `builtin()` に実装し、型エラー・境界エラーを S式で返す。コンパイラが match の漏れを指す箇所（型検査、VC 生成など）もすべて埋める

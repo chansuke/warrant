@@ -102,6 +102,8 @@ warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 
 `spec-diff` は2つの版を節ごとに比べる（M1-7）。`:ensures` の削除・変更、`:requires` の追加・変更、`:effects` の拡大・削除、`:budget` の緩和・削除、型シグネチャの変更、関数の削除を `:verdict weakened` とし、1つでもあれば終了コード 1。本体だけの変更は `(impl (f :body changed))` に別に出す（エージェントだけでマージしてよい範囲）。z3 があれば、ensures / requires の変更について「古い requires ⇒ 新しい requires」と「古い requires ∧ 新しい ensures ⇒ 古い ensures」を証明し、示せた変更は `refined` として弱体化から外す（`--no-smt` で省略）
 
+`run --report` は実行の内訳を S式で出す。`(hot ...)` は関数ごとの呼び出し回数、`:incl-ms`（外側の呼び出しだけで数えた包含時間）、`:self-ms`（呼び出し先を除いた時間。契約の評価を含む）。`(clauses ...)` は実行時に検査した節ごとの回数と時間で、節の番号は `check` の `:clauses` と同じ。`(builtins ...)` は組み込み関数ごとの呼び出し回数。外からの計測には `scripts/bench-compare.sh`（基準リビジョンと交互に bench を取り median を比べる）と `scripts/flamegraph.sh`（perf と inferno）を使う
+
 `run` と `bench` は実行前に型検査とエフェクト検査を行い、エラーがあれば実行せず終了コード 1 で終わる。`--no-typecheck` で省略できるのは型検査だけで、エフェクト検査は省略できない（D20）。未定義シンボルと型注釈の欠落はロードの段階で拒否され、終了コード 2
 
 エラーの kind: `parse syntax load unbound type arity bounds overflow div-zero contract effect stack io usage`
@@ -125,7 +127,15 @@ warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 - **M2**: 独自ランタイム（Perceus RC ＋ work-stealing）、純粋関数の自動並列化、並列効率（1コア対Nコア）のレポート
 - **M3**: 人間は仕様だけを書き、エージェントがマージソートを実装 → 証明 → ベンチ → マージまでのループを完結させる
 
-## 8. 未決事項
+## 8. 形式検証とテスト
+
+- `formal/lean/`: 契約の省略の健全性。`contracts::levels` の3条件（すべての呼び出し箇所で VC が proved、値として使われない、`main` でない）の下で、`requires` の実行時検査を外しても結果・契約違反・無応答が変わらないことを、関数値と値経由の呼び出しを持つ小さな言語のモデルで証明する（`erasure_sound`）。条件を1つ外すと結果が変わる例も載せる。VC は「解けたときの意味」で仮定し、SMT の符号化そのものの正しさは対象外
+- `formal/tla/`: 証明キャッシュ（複数プロセスの同時書き込みとハッシュ衝突）と並列 discharge（ロック付きの共有イテレータ）を TLC で検査する。どちらも、仕組みを外したモデル（その場書き込み、ロックなしの取り出し）で不変条件が破れることを負の対照として確かめる
+- `tests/soundness.rs`: ランダムな関数で、全 VC が proved なら全契約を検査して実行しても失敗しないことを確かめる差分テスト。SMT の符号化の誤りを捕まえる（割り算をユークリッド除算にした変異、i64 の上限を1ずらした変異で失敗することを確認済み）
+- `tests/properties.rs`: ランダムな正規形の Wisp・pretty 往復と、フロントエンドが panic しないこと
+- CI（`.github/workflows/ci.yml`）: test と clippy（`-D warnings`）、PR の bench 比較（15% を超える退行で失敗）、プロファイルと flame graph の成果物、TLC、Lean
+
+## 9. 未決事項
 
 - 停止性: `(:decreases ...)` を入れるか、M1 では `assumed` 扱いにするか
 - `perm?` のような多重集合の性質をどこまで自動証明するか（補題をエージェントに書かせる仕組み）。M1 では `perm?` を含む節は unsupported として実行時検査に残る。msort の例では、`perm?` の2節以外の 37 VC が proved
