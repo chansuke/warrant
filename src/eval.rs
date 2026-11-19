@@ -539,7 +539,11 @@ impl<'p> Interp<'p> {
                 if n < 0 {
                     return Err(RtError::new("bounds", format!("(range {}) needs n >= 0", n)));
                 }
-                let out: Vec<Value> = (0..n).map(Value::Int).collect();
+                let mut out: Vec<Value> = Vec::new();
+                if out.try_reserve_exact(n as usize).is_err() {
+                    return Err(RtError::new("alloc", format!("(range {}) needs more memory than can be allocated", n)));
+                }
+                out.extend((0..n).map(Value::Int));
                 self.prof.vec_alloc(out.len());
                 Ok(Value::Vec(Rc::new(out)))
             }

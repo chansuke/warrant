@@ -103,3 +103,9 @@ fn load_errors_point_at_the_source_in_both_views() {
     let d = lower(&forms, &spans).unwrap_err();
     assert_eq!(d.to_sexp(), "(error :kind unbound :at (line 2 col 7) :msg \"unbound symbol `y`\")");
 }
+
+#[test]
+fn an_impossible_range_is_an_alloc_error_not_a_panic() {
+    let (kind, _) = run("(defn main [] -> i64 (len (range 9223372036854775807)))").unwrap_err();
+    assert_eq!(kind, "alloc");
+}
