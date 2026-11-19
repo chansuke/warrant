@@ -137,6 +137,11 @@ pub fn parse_spanned(src: &str) -> Result<(Vec<Sexp>, Vec<SpanTree>), ParseError
         if items.is_empty() {
             continue; // blank or comment-only line
         }
+        // A lone `:` or `.` is that symbol: the printer has no other way to show it.
+        if items.len() == 1 && is_marker(&items[0].0) {
+            lines.push(Line { indent, items, splice: false, no });
+            continue;
+        }
         let splice = items[0].0 == Sexp::Sym(".".into());
         if splice {
             items.remove(0);
@@ -278,6 +283,11 @@ mod tests {
         let half = MAX_NESTING / 2 + 1;
         let e = parse(&format!("{}{}", indented(half), " ".repeat(half) + &colons(half))).unwrap_err();
         assert_eq!((e.line, e.col), (1, 1));
+    }
+
+    #[test]
+    fn a_lone_marker_symbol_roundtrips() {
+        roundtrip(":\n.\n(f : .)");
     }
 
     #[test]
