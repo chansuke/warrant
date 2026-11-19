@@ -19,9 +19,12 @@ target/release/warrant bench examples/msort.wrt -n 10
 
 | ファイル | 役割 |
 |---|---|
-| `src/sexp.rs` | 字句解析・構文解析（位置付きエラー）、`flat` / `pretty` 表示、`is_clause` |
-| `src/wisp.rs` | Wisp 表示の印字と構文解析（可逆） |
-| `src/eval.rs` | `load`（defn と節の解析）、`Interp`（評価、契約、エフェクト、組み込み関数） |
+| `src/sexp.rs` | 字句解析・構文解析（位置付きエラー、`SpanTree`）、`flat` / `pretty` 表示、`is_clause` |
+| `src/wisp.rs` | Wisp 表示の印字と構文解析（可逆、`parse_spanned`） |
+| `src/ast.rs` | `lower`: defn と節の解析、名前解決、型注釈の解析。静的検査はすべてここの `Module` を読む |
+| `src/builtin.rs` | 組み込み関数の `enum Builtin` と名前の対応 |
+| `src/diag.rs` | 静的検査のエラー `Diag`（`:at` 付きの S式） |
+| `src/eval.rs` | `Program::new`（`Module` から作る）、`Interp`（評価、契約、エフェクト、組み込み関数） |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |
 | `src/main.rs` | CLI。大きいスタックのスレッドで実行し、終了コードを返す |
 | `tests/m0.rs` | 例題の往復・実行・エラー種別の統合テスト |
@@ -41,5 +44,5 @@ target/release/warrant bench examples/msort.wrt -n 10
 - 小さく分けてコミットする。各コミットで `cargo test --release` と `cargo clippy` が通る状態にする
 - 性能に関わる変更は、前後で `warrant bench examples/msort.wrt -n 10` を取り、コミットメッセージに median を書く
 - 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（番号 D13 から）
-- 新しい組み込み関数: `eval.rs` の `BUILTINS` に名前を足し、`builtin()` に実装し、型エラー・境界エラーを S式で返す
-- 新しい節 `(:xxx ...)`: `eval.rs` の `load` の clause 解析に足し、`check` の出力と DESIGN.md の言語の節を更新する
+- 新しい組み込み関数: `builtin.rs` の `Builtin` に足し、`eval.rs` の `builtin()` に実装し、型エラー・境界エラーを S式で返す。コンパイラが match の漏れを指す箇所（型検査、VC 生成など）もすべて埋める
+- 新しい節 `(:xxx ...)`: `ast.rs` の `Lowerer::clause` に足し、`check` の出力と DESIGN.md の言語の節を更新する

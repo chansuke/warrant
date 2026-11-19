@@ -66,6 +66,7 @@ AIエージェントが主に実装を書き、**人間はボトルネックに�
 - 組み込み: `+ - * / mod = < <= > >= not len get slice rest concat cons empty? range vec map fold filter sorted? perm? print`
 - `print` だけがエフェクト `io` を持つ。エフェクト検査は**推移的**（呼び出し元すべての宣言を確認）
 - 型は構文として解析するだけで、M0 では検査しない
+- M1 から: `defn` の引数と戻り値の型注釈は必須（`ast::lower` が拒否する）。型は `i64` `Bool` `Str` `(Vec T)` `(Fn [T ...] R)` `(Fn [T ...] R :effects [io])`。未定義シンボルは実行前に `:kind unbound :at (line L col C)` で報告する
 
 ### Wisp 表示の規則
 
