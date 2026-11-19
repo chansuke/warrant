@@ -205,3 +205,43 @@ fn names_and_strings_with_smt_escape_characters_are_not_proved_wrongly() {
         assert!(o.stdout.starts_with("(error :kind contract"), "{}", o.stdout);
     }
 }
+
+#[test]
+fn a_proof_cache_shipped_with_the_source_is_not_trusted() {
+    if !have_z3() {
+        return;
+    }
+    let root = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("planted-{}", std::process::id()));
+    let (repo, home) = (root.join("repo"), root.join("home"));
+    for d in [&repo, &home] {
+        let _ = std::fs::remove_dir_all(d);
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::write(repo.join("p.wrt"), "(defn f [x : i64] -> i64 (:ensures (> result 0)) x)\n(defn main [] -> i64 (f -5))\n").unwrap();
+    let run = || {
+        let o = Command::new(env!("CARGO_BIN_EXE_warrant"))
+            .args(["run", "p.wrt"])
+            .current_dir(&repo)
+            .env("HOME", &home)
+            .env("XDG_CACHE_HOME", home.join("cache"))
+            .output()
+            .unwrap();
+        (o.status.code(), String::from_utf8_lossy(&o.stdout).into_owned())
+    };
+    assert_eq!(run().0, Some(1));
+    let user_cache = home.join("cache/warrant/proofs");
+    assert!(std::fs::read_dir(&user_cache).is_ok_and(|mut d| d.next().is_some()), "proofs go to the user cache");
+    let planted = repo.join(".warrant/cache");
+    std::fs::create_dir_all(&planted).unwrap();
+    for e in std::fs::read_dir(&user_cache).unwrap() {
+        let e = e.unwrap();
+        std::fs::copy(e.path(), planted.join(e.file_name())).unwrap();
+        let text = std::fs::read_to_string(e.path()).unwrap();
+        let forged = text.replacen(":status failed", ":status proved :was failed", 1);
+        std::fs::write(planted.join(e.file_name()), forged).unwrap();
+    }
+    std::fs::remove_dir_all(&user_cache).unwrap();
+    let (code, out) = run();
+    assert_eq!(code, Some(1), "{}", out);
+    assert!(out.starts_with("(error :kind contract"), "{}", out);
+}

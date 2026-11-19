@@ -35,7 +35,8 @@ const USAGE: &str = "usage: warrant <command> FILE [options]
                                                  time main N times; enforce (:budget (wall-ms N)) on main
   spec-diff OLD NEW [--no-smt] [--timeout-ms N]  list spec changes; exit 1 if a contract was weakened
 Proof options (check, and run/bench with --contracts auto, the default):
-  --timeout-ms N (per VC, default 2000)  --jobs N (default: all cores)  --cache-dir D  --no-cache
+  --timeout-ms N (per VC, default 2000)  --jobs N (default: all cores)  --no-cache
+  --cache-dir D (default: $XDG_CACHE_HOME/warrant/proofs or ~/.cache/warrant/proofs)
 --no-contracts is --contracts off. FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
 
 fn opt_value<'a>(opts: &'a [String], key: &str) -> Option<&'a str> {
@@ -103,6 +104,17 @@ fn section(name: &str, ns: u128, errors: &[Diag]) -> String {
     s + ")"
 }
 
+/// A cached `proved` erases a run-time check, so the cache must not come with
+/// the source: a cloned repository could ship forged entries (D23). The
+/// default lives in the user's own cache directory instead.
+fn default_cache_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .filter(|d| std::path::Path::new(d).is_absolute())
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::Path::new(&h).join(".cache")))?;
+    Some(base.join("warrant").join("proofs"))
+}
+
 struct Prover {
     z3: Option<Z3>,
     jobs: usize,
@@ -114,7 +126,11 @@ impl Prover {
         let timeout_ms = positive(opts, "--timeout-ms", 2000)?;
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as u64;
         let jobs = positive(opts, "--jobs", cores)? as usize;
-        let cache = (!opts.iter().any(|o| o == "--no-cache")).then(|| Cache::new(opt_value(opts, "--cache-dir").unwrap_or(".warrant/cache")));
+        let cache = if opts.iter().any(|o| o == "--no-cache") {
+            None
+        } else {
+            opt_value(opts, "--cache-dir").map(std::path::PathBuf::from).or_else(default_cache_dir).map(Cache::new)
+        };
         Ok(Prover { z3: Z3::find(timeout_ms), jobs, cache })
     }
 
