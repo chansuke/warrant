@@ -95,7 +95,7 @@ pub fn summary_sexp(results: &[VcResult], total_ns: u128) -> String {
     let count = |f: fn(&Status) -> bool| results.iter().filter(|r| f(&r.status)).count();
     let failed = count(|s| matches!(s, Status::Failed { .. }));
     let mut slow: Vec<&VcResult> = results.iter().filter(|r| !r.cached && matches!(r.ob.goal, Goal::Script(_))).collect();
-    slow.sort_by(|a, b| b.ns.cmp(&a.ns));
+    slow.sort_by_key(|a| std::cmp::Reverse(a.ns));
     let slowest: Vec<String> = slow
         .iter()
         .take(SLOWEST)
