@@ -2,7 +2,9 @@
 //! a reference interpreter with runtime-checked contracts and effects,
 //! and a machine-readable profiler.
 
+pub mod ast;
 pub mod builtin;
+pub mod diag;
 pub mod eval;
 pub mod profile;
 pub mod sexp;

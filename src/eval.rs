@@ -7,6 +7,7 @@
 //! callee or closure. Functions with no `:effects` clause are unchecked in M0.
 //! Integer arithmetic is checked: overflow is an error, never a wrap.
 
+use crate::ast::{Budget, Module};
 use crate::builtin::Builtin;
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str, Sexp};
@@ -56,10 +57,6 @@ impl Env {
     fn bind(&self, name: String, val: Value) -> Env {
         Env(Some(Rc::new(Frame { name, val, next: self.clone() })))
     }
-}
-
-pub struct Budget {
-    pub wall_ms: Option<f64>,
 }
 
 pub struct FnDef {
@@ -123,87 +120,27 @@ pub fn parse_params(v: &[Sexp]) -> R<Vec<String>> {
     Ok(out)
 }
 
-fn parse_budget(xs: &[Sexp]) -> R<Budget> {
-    let mut b = Budget { wall_ms: None };
-    for x in xs {
-        match x {
-            Sexp::List(v) if v.len() == 2 && v[0] == Sexp::Sym("wall-ms".into()) => match &v[1] {
-                Sexp::Int(n) => b.wall_ms = Some(*n as f64),
-                _ => return Err(RtError::new("syntax", "(wall-ms N) needs an integer")),
-            },
-            _ => return Err(RtError::new("syntax", format!("unknown budget item `{}`", flat(x)))),
-        }
+impl Program {
+    pub fn new(m: &Module) -> Program {
+        let src = |cs: &[crate::ast::Clause]| cs.iter().map(|c| c.src.clone()).collect();
+        let fns = m
+            .fns
+            .iter()
+            .map(|d| {
+                let def = FnDef {
+                    name: d.name.clone(),
+                    params: d.params.iter().map(|p| p.name.clone()).collect(),
+                    requires: src(&d.spec.requires),
+                    ensures: src(&d.spec.ensures),
+                    effects: d.spec.effects.as_ref().map(|es| es.iter().cloned().collect()),
+                    budget: d.spec.budget.clone(),
+                    body: d.body_src.clone(),
+                };
+                (d.name.clone(), Rc::new(def))
+            })
+            .collect();
+        Program { fns, order: m.fns.iter().map(|d| d.name.clone()).collect() }
     }
-    Ok(b)
-}
-
-pub fn load(forms: &[Sexp]) -> R<Program> {
-    let mut fns = HashMap::new();
-    let mut order = Vec::new();
-    for f in forms {
-        let bad = || RtError::new("syntax", format!("top-level form must be (defn ...), got `{}`", flat(f)));
-        let Sexp::List(items) = f else { return Err(bad()) };
-        if items.first() != Some(&Sexp::Sym("defn".into())) {
-            return Err(bad());
-        }
-        let Some(Sexp::Sym(name)) = items.get(1) else {
-            return Err(RtError::new("syntax", "defn needs a name"));
-        };
-        let Some(Sexp::Vector(ps)) = items.get(2) else {
-            return Err(RtError::new("syntax", format!("defn {} needs a [params] vector", name)));
-        };
-        let params = parse_params(ps)?;
-        let mut i = 3;
-        if items.get(i) == Some(&Sexp::Sym("->".into())) {
-            if items.get(i + 1).is_none() {
-                return Err(RtError::new("syntax", format!("defn {}: `->` needs a type", name)));
-            }
-            i += 2;
-        }
-        let (mut requires, mut ensures, mut effects, mut budget, mut body) =
-            (Vec::new(), Vec::new(), None, None, Vec::new());
-        for it in &items[i..] {
-            if let Sexp::List(cl) = it {
-                if let Some(Sexp::Kw(k)) = cl.first() {
-                    match k.as_str() {
-                        "effects" => match cl.get(1) {
-                            Some(Sexp::Vector(es)) if cl.len() == 2 => {
-                                let mut v = Vec::new();
-                                for e in es {
-                                    match e {
-                                        Sexp::Sym(s) => v.push(s.clone()),
-                                        _ => return Err(RtError::new("syntax", "effects must be symbols")),
-                                    }
-                                }
-                                effects = Some(v);
-                            }
-                            _ => return Err(RtError::new("syntax", "write effects as (:effects [io ...])")),
-                        },
-                        "requires" => requires.extend(cl[1..].iter().cloned()),
-                        "ensures" => ensures.extend(cl[1..].iter().cloned()),
-                        "budget" => budget = Some(parse_budget(&cl[1..])?),
-                        other => {
-                            return Err(RtError::new("syntax", format!("unknown clause :{} in {}", other, name)))
-                        }
-                    }
-                    continue;
-                }
-            }
-            body.push(it.clone());
-        }
-        if body.is_empty() {
-            return Err(RtError::new("syntax", format!("defn {} has no body", name)));
-        }
-        if fns.contains_key(name) {
-            return Err(RtError::new("syntax", format!("duplicate definition of {}", name)));
-        }
-        order.push(name.clone());
-        fns.insert(
-            name.clone(),
-            Rc::new(FnDef { name: name.clone(), params, requires, ensures, effects, budget, body }),
-        );
-    }
-    Ok(Program { fns, order })
 }
 
 pub fn type_name(v: &Value) -> &'static str {

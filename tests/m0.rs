@@ -1,5 +1,6 @@
-use warrant::eval::{load, show, Interp};
-use warrant::sexp::{parse_all, pretty_all};
+use warrant::ast::lower;
+use warrant::eval::{show, Interp, Program};
+use warrant::sexp::{parse_all, parse_all_spanned, pretty_all};
 use warrant::wisp;
 
 const EXAMPLES: &[(&str, &str)] = &[
@@ -25,7 +26,8 @@ fn run(src: &str) -> Result<String, (String, String)> {
     std::thread::Builder::new()
         .stack_size(1 << 30)
         .spawn(move || {
-            let prog = load(&parse_all(&src).unwrap()).unwrap();
+            let (forms, spans) = parse_all_spanned(&src).unwrap();
+            let prog = Program::new(&lower(&forms, &spans).unwrap());
             let mut it = Interp::new(&prog, true, true);
             it.call_main().map(|v| show(&v)).map_err(|e| (e.kind.to_string(), e.msg))
         })
@@ -60,7 +62,7 @@ fn broken_implementation_violates_ensures() {
     let src = "(defn bad-sort [xs : (Vec i64)] -> (Vec i64)
                  (:ensures (sorted? result) (perm? result xs))
                  (cons 99 xs))
-               (defn main [] (bad-sort [3 1 2]))";
+               (defn main [] -> (Vec i64) (bad-sort [3 1 2]))";
     let (kind, msg) = run(src).unwrap_err();
     assert_eq!(kind, "contract");
     assert!(msg.contains("ensures failed in bad-sort"), "{}", msg);
@@ -69,6 +71,17 @@ fn broken_implementation_violates_ensures() {
 #[test]
 fn requires_is_checked_before_the_body() {
     let src = "(defn head [xs : (Vec i64)] -> i64 (:requires (not (empty? xs))) (get xs 0))
-               (defn main [] (head []))";
+               (defn main [] -> i64 (head []))";
     assert_eq!(run(src).unwrap_err().0, "contract");
+}
+
+#[test]
+fn load_errors_point_at_the_source_in_both_views() {
+    let wrt = "(defn f [x : i64] -> i64\n  (+ x y))";
+    let (forms, spans) = parse_all_spanned(wrt).unwrap();
+    let d = lower(&forms, &spans).unwrap_err();
+    assert_eq!(d.to_sexp(), "(error :kind unbound :at (line 2 col 8) :msg \"unbound symbol `y`\")");
+    let (forms, spans) = wisp::parse_spanned("defn f [x : i64] -> i64\n  + x y").unwrap();
+    let d = lower(&forms, &spans).unwrap_err();
+    assert_eq!(d.to_sexp(), "(error :kind unbound :at (line 2 col 7) :msg \"unbound symbol `y`\")");
 }

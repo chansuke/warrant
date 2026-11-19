@@ -5,9 +5,10 @@
 //! 2 parse/load/usage error, 3 performance budget exceeded.
 
 use std::time::Instant;
+use warrant::ast;
 use warrant::eval::{self, Interp, Program};
 use warrant::profile::{self, ms, RunInfo};
-use warrant::sexp::{self, quote_str, Sexp};
+use warrant::sexp::{self, quote_str, Sexp, SpanTree};
 use warrant::wisp;
 
 fn main() {
@@ -31,7 +32,13 @@ fn opt_value<'a>(opts: &'a [String], key: &str) -> Option<&'a str> {
     opts.iter().position(|o| o == key).and_then(|i| opts.get(i + 1)).map(|s| s.as_str())
 }
 
-fn read_forms(path: &str) -> Result<(Vec<Sexp>, u128), i32> {
+struct Source {
+    forms: Vec<Sexp>,
+    spans: Vec<SpanTree>,
+    parse_ns: u128,
+}
+
+fn read_forms(path: &str) -> Result<Source, i32> {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -40,10 +47,10 @@ fn read_forms(path: &str) -> Result<(Vec<Sexp>, u128), i32> {
         }
     };
     let t = Instant::now();
-    let r = if path.ends_with(".wisp") { wisp::parse(&src) } else { sexp::parse_all(&src) };
-    let ns = t.elapsed().as_nanos();
+    let r = if path.ends_with(".wisp") { wisp::parse_spanned(&src) } else { sexp::parse_all_spanned(&src) };
+    let parse_ns = t.elapsed().as_nanos();
     match r {
-        Ok(f) => Ok((f, ns)),
+        Ok((forms, spans)) => Ok(Source { forms, spans, parse_ns }),
         Err(e) => {
             println!("{}", e.to_sexp());
             Err(2)
@@ -51,11 +58,14 @@ fn read_forms(path: &str) -> Result<(Vec<Sexp>, u128), i32> {
     }
 }
 
-fn load(forms: &[Sexp]) -> Result<Program, i32> {
-    eval::load(forms).map_err(|e| {
-        println!("{}", e.to_sexp());
-        2
-    })
+fn load(src: &Source) -> Result<Program, i32> {
+    match ast::lower(&src.forms, &src.spans) {
+        Ok(m) => Ok(Program::new(&m)),
+        Err(d) => {
+            println!("{}", d.to_sexp());
+            Err(2)
+        }
+    }
 }
 
 fn real_main(args: Vec<String>) -> i32 {
@@ -65,13 +75,14 @@ fn real_main(args: Vec<String>) -> i32 {
     }
     let (cmd, path, opts) = (args[1].as_str(), args[2].as_str(), &args[3..]);
     let has = |f: &str| opts.iter().any(|o| o == f);
-    let (forms, parse_ns) = match read_forms(path) {
+    let src = match read_forms(path) {
         Ok(x) => x,
         Err(c) => return c,
     };
+    let (forms, parse_ns) = (&src.forms, src.parse_ns);
     match cmd {
         "run" => {
-            let prog = match load(&forms) {
+            let prog = match load(&src) {
                 Ok(p) => p,
                 Err(c) => return c,
             };
@@ -97,12 +108,12 @@ fn real_main(args: Vec<String>) -> i32 {
             code
         }
         "check" => {
-            let prog = match load(&forms) {
+            let prog = match load(&src) {
                 Ok(p) => p,
                 Err(c) => return c,
             };
-            let view = wisp::print_all(&forms);
-            let roundtrip_ok = matches!(wisp::parse(&view), Ok(back) if back == forms);
+            let view = wisp::print_all(forms);
+            let roundtrip_ok = matches!(wisp::parse(&view), Ok(back) if back == *forms);
             let mut s = format!(
                 "(check\n  (file {})\n  (parse-ms {})\n  (roundtrip {})\n  (fns",
                 quote_str(path),
@@ -132,8 +143,8 @@ fn real_main(args: Vec<String>) -> i32 {
         "fmt" => {
             let default_to = if path.ends_with(".wisp") { "sexp" } else { "wisp" };
             match opt_value(opts, "--to").unwrap_or(default_to) {
-                "wisp" => print!("{}", wisp::print_all(&forms)),
-                "sexp" => print!("{}", sexp::pretty_all(&forms)),
+                "wisp" => print!("{}", wisp::print_all(forms)),
+                "sexp" => print!("{}", sexp::pretty_all(forms)),
                 other => {
                     println!("(error :kind usage :msg {})", quote_str(&format!("unknown --to {}", other)));
                     return 2;
@@ -142,7 +153,7 @@ fn real_main(args: Vec<String>) -> i32 {
             0
         }
         "bench" => {
-            let prog = match load(&forms) {
+            let prog = match load(&src) {
                 Ok(p) => p,
                 Err(c) => return c,
             };
