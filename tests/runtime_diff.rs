@@ -260,6 +260,37 @@ fn fixed_cases_agree() {
     });
 }
 
+/// The IR runtime updates a vector in place only when nothing else refers to
+/// its buffer. Each case shares a buffer one way and then writes through one
+/// of the sharers; the M1 interpreter, which always copies, is the reference.
+#[test]
+fn shared_vectors_never_change() {
+    on_big_stack(|| {
+        for body in [
+            "(let [v [1 2 3] w (rest v) x (cons 9 w) y (cons 8 w)] (concat (concat x y) (concat w v)))",
+            "(let [a (rest [1 2 3]) b (concat a [4]) c (concat a [5])] (concat b c))",
+            "(let [v [1 2 3 4] s (slice v 0 2) t (concat s [9])] (concat t v))",
+            "(let [v [1 2 3 4] s (slice v 0 2)] (concat s [9]))",
+            "(let [v [1 2 3 4] s (slice v 1 3) t (cons 0 s)] (concat t (slice v 2 4)))",
+            "(let [v [1 2] f (fn [] v) w (cons 0 v)] (concat (f) w))",
+            "(let [v [1 2] f (fn [] (cons 7 v))] (concat (f) (concat (f) v)))",
+            "(let [v (range 4)] (if (empty? v) v (concat (rest v) (rest v))))",
+            "(let [v [5 6]] (concat (map (fn [x] (+ x (len v))) v) v))",
+            "(push [1 2 3] 4)",
+            "(let [v [1 2]] (concat (push v 3) (push v 4)))",
+            "(keep [1 2 3])",
+        ] {
+            let src = format!(
+                "(defn push [v : (Vec i64) x : i64] -> (Vec i64) (concat v [x]))
+                 (defn keep [v : (Vec i64)] -> (Vec i64) (:ensures (= (len result) (+ (len v) 1))) (cons 0 (rest (cons 1 v))))
+                 (defn main [] -> (Vec i64) {})",
+                body
+            );
+            assert!(same(&src).is_ok(), "{}", src);
+        }
+    });
+}
+
 /// Only some clauses kept, as `--contracts auto` leaves them: the kept one
 /// keeps its source index, and `result` is a parameter in `requires`.
 #[test]
