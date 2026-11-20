@@ -25,14 +25,16 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 perf record --quiet -F 4999 -g --call-graph dwarf -o "$work/perf.data" -- \
-  "$root/target/release/warrant" bench "$file" -n "$runs" --contracts off >/dev/null 2>&1
-perf script -i "$work/perf.data" 2>/dev/null | inferno-collapse-perf | grep '^warrant;' >"$work/stacks"
+  "$root/target/release/warrant" bench "$file" -n "$runs" --contracts off >/dev/null
+perf script -i "$work/perf.data" 2>/dev/null | inferno-collapse-perf | { grep -E '^warrant[; ]' || true; } >"$work/stacks"
+[ -s "$work/stacks" ] || { echo "(error :kind io :msg \"perf recorded no samples of warrant\")"; exit 1; }
 inferno-flamegraph --title "warrant bench $file --contracts off" <"$work/stacks" >"$out"
 
-awk -v file="$file" -v svg="$out" '
+FILE=$file SVG=$out awk '
 function category(f) {
-  if (f ~ /extend_trusted/) return "copy-extend"
+  if (f ~ /extend_trusted/ || (f ~ /Cloned/ && f ~ /fold/)) return "copy-extend"
   if (f ~ /to_vec/) return "copy-to-vec"
+  if (f ~ /Frame/ && f ~ /drop/) return "env"
   if (f ~ /drop_slow/ || (f ~ /drop_in_place/ && f ~ /Value/)) return "free"
   if (f ~ /^(_int_malloc|malloc|_int_free|cfree.*|free|malloc_consolidate|unlink_chunk.*|_int_realloc|realloc)$/) return "alloc"
   if (f ~ /[Hh]ash/ && f ~ /warrant/) return "name-lookup"
@@ -48,8 +50,9 @@ function category(f) {
   for (i = n; i >= 1; i--) { c = category(fr[i]); if (c != "") { hit = c; break } }
   pct[hit] += w
 }
+function str(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return "\"" s "\"" }
 END {
-  printf "(profile-breakdown :file \"%s\" :svg \"%s\"", file, svg
+  printf "(profile-breakdown :file %s :svg %s", str(ENVIRON["FILE"]), str(ENVIRON["SVG"])
   split("copy-extend copy-to-vec free alloc eval builtin call env name-lookup other", order, " ")
   for (i = 1; i <= 10; i++) printf " :%s-pct %.1f", order[i], 100 * pct[order[i]] / total
   print ")"
