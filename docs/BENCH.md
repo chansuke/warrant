@@ -46,7 +46,7 @@ D25 で `perm?` の2節も証明できるようになり、auto で検査する�
 | 4000 | 202.2 | 24,044,082 |
 | 8000 | 706.0 | 96,096,133 |
 
-n を2倍にするとコピーした要素は4倍、時間は 3.0〜3.5 倍になる（O(n²)）。n=2000 の median が上の表の 57 ms より高いのは、同じ日の別の時刻に測ったため（1回の比較では揺れの範囲を判断できない）。
+n を2倍にするとコピーした要素は4倍、時間は 3.0〜3.5 倍になる（O(n²)）。n=2000 の median は上の表の 57 ms より高い。コードは同じで、差の原因は調べていない。
 
 `scripts/profile-breakdown.sh examples/msort.wrt OUT.svg 20`（perf、`bench -n 20 --contracts off`、n=2000）:
 
@@ -61,4 +61,4 @@ n を2倍にするとコピーした要素は4倍、時間は 3.0〜3.5 倍に�
 | 組み込み関数の分岐、呼び出し、環境 | 5.7% |
 | その他（起動、カーネル、不明） | 7.3% |
 
-flame graph の self 時間の上位5関数（`perf report --no-children`）: `Cloned<Iter<Value>>::fold`（`cons` の複製）30.3%、`<[Value]>::to_vec` 15.9%、`Interp::eval` 9.9%、`Rc<Vec<Value>>::drop_slow` 9.1%、`drop_in_place<Value>` 7.7%。
+flame graph の self 時間の上位5関数（同じ条件で別に記録した perf.data を `perf report --no-children` で集計。インライン化されたコードは呼び出し元の関数に数えるので、上の表とは基準が違う。`Interp::eval` が上の表より大きいのは、eval にインライン化された clone や drop を含むためと推測している）: `Cloned<Iter<Value>>::fold`（`cons` の複製）30.3%、`<[Value]>::to_vec` 15.9%、`Interp::eval` 9.9%、`Rc<Vec<Value>>::drop_slow` 9.1%、`drop_in_place<Value>` 7.7%。
