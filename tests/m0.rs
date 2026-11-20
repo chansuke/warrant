@@ -1,6 +1,7 @@
 use warrant::ast::lower;
 use warrant::contracts::{Checks, Mode};
-use warrant::eval::{show, Interp, Program};
+use warrant::ir::Program;
+use warrant::rt::Interp;
 use warrant::sexp::{parse_all, parse_all_spanned, pretty_all};
 use warrant::wisp;
 
@@ -32,7 +33,7 @@ fn run(src: &str) -> Result<String, (String, String)> {
             let m = lower(&forms, &spans).unwrap();
             let prog = Program::new(&m, &Checks::new(&m, Mode::Runtime, None));
             let mut it = Interp::new(&prog, true);
-            it.call_main().map(|v| show(&v)).map_err(|e| (e.kind.to_string(), e.msg))
+            it.call_main().map(|v| prog.show(&v)).map_err(|e| (e.kind.to_string(), e.msg))
         })
         .unwrap()
         .join()

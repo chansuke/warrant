@@ -9,7 +9,8 @@ use warrant::ast::{self, Module};
 use warrant::cache::Cache;
 use warrant::contracts::{self, Checks, ClauseLevels, Level, Mode};
 use warrant::diag::Diag;
-use warrant::eval::{self, Interp, Program};
+use warrant::ir::Program;
+use warrant::rt::Interp;
 use warrant::profile::{self, ms, RunInfo};
 use warrant::sexp::{self, quote_str, Sexp, SpanTree};
 use warrant::solver::Z3;
@@ -276,7 +277,7 @@ fn run(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
     let wall_ns = t.elapsed().as_nanos();
     let code = match &r {
         Ok(v) => {
-            println!("(result {})", eval::show(v));
+            println!("(result {})", p.prog.show(v));
             0
         }
         Err(e) => {
@@ -326,7 +327,7 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
         ms(mean),
         ms(times[n - 1])
     );
-    let budget = p.prog.fns.get("main").and_then(|m| m.budget.as_ref()).and_then(|b| b.wall_ms);
+    let budget = p.prog.main().and_then(|m| m.budget.as_ref()).and_then(|b| b.wall_ms);
     let mut code = 0;
     if let Some(limit) = budget {
         let over = median as f64 / 1e6 > limit;

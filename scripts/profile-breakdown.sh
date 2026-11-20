@@ -8,7 +8,7 @@
 # Needs perf (kernel.perf_event_paranoid <= 1) and inferno. Each sample is
 # attributed to the frame nearest the leaf that matches a category, so an
 # inlined `Value::clone` under `Vec::extend` counts as copying. The patterns
-# match the M1 interpreter (`eval.rs`) and change with it.
+# match the IR runtime (`rt.rs`) and change with it.
 set -euo pipefail
 
 file=${1:-examples/msort.wrt}

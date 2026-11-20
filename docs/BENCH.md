@@ -62,3 +62,10 @@ n を2倍にするとコピーした要素は4倍、時間は 3.0〜3.5 倍に�
 | その他（起動、カーネル、不明） | 7.3% |
 
 flame graph の self 時間の上位5関数（同じ条件で別に記録した perf.data を `perf report --no-children` で集計。インライン化されたコードは呼び出し元の関数に数えるので、上の表とは基準が違う。`Interp::eval` が上の表より大きいのは、eval にインライン化された clone や drop を含むためと推測している）: `Cloned<Iter<Value>>::fold`（`cons` の複製）30.3%、`<[Value]>::to_vec` 15.9%、`Interp::eval` 9.9%、`Rc<Vec<Value>>::drop_slow` 9.1%、`drop_in_place<Value>` 7.7%。
+
+### IR のランタイム（M2-1、2026-11-20）
+
+`scripts/bench-compare.sh main examples/msort.wrt 5`（`--contracts auto`、main と交互に5回）: main 56.3 ms → 46.0 ms（-18.4%）。M2-0 の見積もり（インタプリタ本体と名前のハッシュで 19%）とほぼ一致する。
+同じビルドを交互に3回: `--contracts runtime` 144.4 / 144.8 / 147.8 ms、`--contracts off` 45.2 / 46.1 / 45.8 ms。
+
+`scripts/profile-breakdown.sh`（n=2000）: `cons` の複製 39.4%、`rest` / `slice` の複製 20.9%、解放 12.1%、malloc / free 8.4%、`eval` 5.6%、組み込み関数の分岐 2.9%、呼び出し 0.7%、環境と名前のハッシュ 0%、その他 9.9%。残りの時間の大半はベクタの複製で、M2-2 の対象になる。
