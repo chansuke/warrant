@@ -174,32 +174,47 @@ fn module(src: &str) -> Module {
 
 type Outcome = Result<String, (String, String, Vec<String>)>;
 
-fn run_m1(m: &Module, mode: Mode) -> Outcome {
-    let prog = warrant::eval::Program::new(m, &Checks::new(m, mode, None));
-    let mut it = warrant::eval::Interp::new(&prog, true);
-    let r = it.call_main().map(|v| warrant::eval::show(&v)).map_err(|e| (e.kind.to_string(), e.msg, e.trace));
-    let p = &it.prof;
-    r.map(|v| format!("{} calls {} closures {} builtins {} allocs {} elems {}", v, p.calls, p.closure_calls, p.builtin_calls, p.vec_allocs, p.vec_elems))
+/// Counters both runtimes keep, compared on errors too. Printed output is
+/// not compared: both write it to stdout directly.
+fn counters(p: &warrant::profile::Profiler) -> String {
+    let clauses: std::collections::BTreeMap<_, _> = p.clauses.iter().map(|(k, v)| (k.clone(), v.checks)).collect();
+    format!(
+        "calls {} closures {} builtins {} allocs {} elems {} contract-checks {} clauses {:?}",
+        p.calls, p.closure_calls, p.builtin_calls, p.vec_allocs, p.vec_elems, p.contract_checks, clauses
+    )
 }
 
-fn run_ir(m: &Module, mode: Mode) -> Outcome {
-    let prog = warrant::ir::Program::new(m, &Checks::new(m, mode, None));
+fn run_m1(m: &Module, checks: &Checks) -> (Outcome, String) {
+    let prog = warrant::eval::Program::new(m, checks);
+    let mut it = warrant::eval::Interp::new(&prog, true);
+    let r = it.call_main().map(|v| warrant::eval::show(&v)).map_err(|e| (e.kind.to_string(), e.msg, e.trace));
+    (r, counters(&it.prof))
+}
+
+fn run_ir(m: &Module, checks: &Checks) -> (Outcome, String) {
+    let prog = warrant::ir::Program::new(m, checks);
     let mut it = warrant::rt::Interp::new(&prog, true);
     let r = it.call_main().map(|v| prog.show(&v)).map_err(|e| (e.kind.to_string(), e.msg, e.trace));
-    let p = &it.prof;
-    r.map(|v| format!("{} calls {} closures {} builtins {} allocs {} elems {}", v, p.calls, p.closure_calls, p.builtin_calls, p.vec_allocs, p.vec_elems))
+    (r, counters(&it.prof))
+}
+
+fn agree(src: &str, m: &Module, checks: &Checks) -> Outcome {
+    let (old, new) = (run_m1(m, checks), run_ir(m, checks));
+    assert_eq!(old, new, "the runtimes disagree on:\n{}", src);
+    new.0
 }
 
 /// The outcome with every contract checked, after checking that the
 /// runtimes agree with contracts both on and off.
 fn same(src: &str) -> Outcome {
     let m = module(src);
-    let mut outcomes = [Mode::Runtime, Mode::Off].map(|mode| {
-        let (old, new) = (run_m1(&m, mode), run_ir(&m, mode));
-        assert_eq!(old, new, "the runtimes disagree ({:?}) on:\n{}", mode.name(), src);
-        new
-    });
-    std::mem::replace(&mut outcomes[0], Ok(String::new()))
+    let on = agree(src, &m, &Checks::new(&m, Mode::Runtime, None));
+    let _ = agree(src, &m, &Checks::new(&m, Mode::Off, None));
+    on
+}
+
+fn error(kind: &str, msg: &str, trace: &[&str]) -> Outcome {
+    Err((kind.into(), msg.into(), trace.iter().map(|s| s.to_string()).collect()))
 }
 
 /// Both interpreters recurse on the Rust stack; the CLI gives them 1 GiB.
@@ -218,6 +233,48 @@ fn examples_agree() {
         ] {
             let _ = same(src);
         }
+    });
+}
+
+#[test]
+fn fixed_cases_agree() {
+    on_big_stack(|| {
+        let make = "(defn make [x : i64 k : i64] -> (Fn [i64] (Fn [] i64))
+                      (fn [x] (let [y (+ x 1) f (fn [] (+ y k)) y (+ y 100)] (fn [] (+ (f) y)))))";
+        let escaping = format!("{}(defn main [] -> i64 (let [mk (make 1000 10) f (mk 2) g (mk 3)] (+ (f) (g))))", make);
+        assert_eq!(same(&escaping).unwrap(), "234");
+        let deep = "(defn down [n : i64] -> i64 (if (= n 0) (/ 1 0) (down (- n 1)))) (defn main [] -> i64 (down 20))";
+        assert_eq!(same(deep), error("div-zero", "(/ 1 0)", &["down"; 16]));
+        for (src, want) in [
+            ("(defn f [] -> i64 1)", error("load", "no (defn main [] ...) found", &[])),
+            ("(defn main [] -> i64 ((fn [x] x) 1 2))", error("arity", "fn expects 1 args, got 2", &["main"])),
+            ("(defn g [x : i64] -> i64 x) (defn main [] -> i64 (g 1 2))", error("arity", "g expects 1 args, got 2", &["main"])),
+            ("(defn main [] -> i64 (if 1 2 3))", error("type", "if condition must be bool, got i64", &["main"])),
+            ("(defn main [] -> Bool (and true 1))", error("type", "and expects bool, got i64", &["main"])),
+            ("(defn main [] -> i64 (1 2))", error("type", "cannot call a value of type i64", &["main"])),
+            ("(defn main [] -> i64 ((do (print \"callee\") 0) (do (print \"arg\") (/ 1 0))))", error("div-zero", "(/ 1 0)", &["main"])),
+        ] {
+            assert_eq!(same(src), want, "{}", src);
+        }
+    });
+}
+
+/// Only some clauses kept, as `--contracts auto` leaves them: the kept one
+/// keeps its source index, and `result` is a parameter in `requires`.
+#[test]
+fn a_partial_clause_mask_agrees() {
+    on_big_stack(|| {
+        let src = "(defn f [result : i64] -> i64
+                     (:requires (= result 7))
+                     (:ensures false (= ((fn [] result)) 9))
+                     (do (let [result 99] result) (+ result 2)))
+                   (defn main [] -> i64 (f 7))";
+        let m = module(src);
+        let mut checks = Checks::new(&m, Mode::Runtime, None);
+        checks.ensures[m.index["f"]] = vec![false, true];
+        assert_eq!(agree(src, &m, &checks).unwrap(), "9");
+        let (_, counted) = run_ir(&m, &checks);
+        assert!(counted.contains("contract-checks 2") && counted.contains("(\"f\", \"ensures\", 1): 1"), "{}", counted);
     });
 }
 
