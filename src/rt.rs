@@ -35,6 +35,14 @@ pub struct Closure {
 
 type R<T> = Result<T, RtError>;
 
+/// How a function body in tail position ends.
+enum Tail {
+    Done(Value),
+    /// A `ConsTail`: cons `head` onto the result of calling the same
+    /// function again with these arguments.
+    Again(Value, Vec<Value>),
+}
+
 /// Fills frame slots that are not bound yet. Never read: a slot is written
 /// by its binding before any use.
 const UNSET: Value = Value::Bool(false);
@@ -145,11 +153,10 @@ impl<'p> Interp<'p> {
                 self.prof.vec_alloc(v.len());
                 Ok(Value::Vec(Vector::new(v)))
             }
-            Node::If(c, t, f) => match self.eval(c, frame)? {
-                Value::Bool(true) => self.eval(t, frame),
-                Value::Bool(false) => self.eval(f, frame),
-                o => Err(RtError::new("type", format!("if condition must be bool, got {}", type_name(&o)))),
-            },
+            Node::If(c, t, f) => {
+                let b = self.cond(c, frame)?;
+                self.eval(if b { t } else { f }, frame)
+            }
             Node::Let(binds, body) => {
                 for (slot, v) in binds {
                     frame[*slot] = self.eval(v, frame)?;
@@ -183,7 +190,55 @@ impl<'p> Interp<'p> {
                 let args = self.eval_all(args, frame)?;
                 self.apply(&f, args)
             }
+            // Only `eval_tail` meets these; this is what one means.
+            Node::ConsTail(..) => match self.eval_tail(n, frame)? {
+                Tail::Done(v) => Ok(v),
+                Tail::Again(..) => unreachable!("eval_tail returns Again only at a ConsTail, which it evaluates"),
+            },
         }
+    }
+
+    fn cond(&mut self, c: &Node, frame: &mut [Value]) -> R<bool> {
+        match self.eval(c, frame)? {
+            Value::Bool(b) => Ok(b),
+            o => Err(RtError::new("type", format!("if condition must be bool, got {}", type_name(&o)))),
+        }
+    }
+
+    /// Evaluates `n` in tail position of a function body: a `ConsTail`
+    /// returns its head and arguments instead of calling.
+    fn eval_tail(&mut self, n: &Node, frame: &mut [Value]) -> R<Tail> {
+        match n {
+            Node::If(c, t, f) => {
+                let b = self.cond(c, frame)?;
+                self.eval_tail(if b { t } else { f }, frame)
+            }
+            Node::Let(binds, body) => {
+                for (slot, v) in binds {
+                    frame[*slot] = self.eval(v, frame)?;
+                }
+                let r = self.eval_tail_seq(body, frame);
+                for (slot, _) in binds {
+                    frame[*slot] = UNSET;
+                }
+                r
+            }
+            Node::Do(es) => self.eval_tail_seq(es, frame),
+            Node::ConsTail(head, args) => {
+                let head = self.eval(head, frame)?;
+                let args = self.eval_all(args, frame)?;
+                Ok(Tail::Again(head, args))
+            }
+            _ => self.eval(n, frame).map(Tail::Done),
+        }
+    }
+
+    fn eval_tail_seq(&mut self, es: &[Node], frame: &mut [Value]) -> R<Tail> {
+        let (last, init) = es.split_last().expect("lower rejects empty bodies");
+        for e in init {
+            self.eval(e, frame)?;
+        }
+        self.eval_tail(last, frame)
     }
 
     fn eval_all(&mut self, es: &[Node], frame: &mut [Value]) -> R<Vec<Value>> {
@@ -239,45 +294,90 @@ impl<'p> Interp<'p> {
         }
     }
 
+    /// Calls function `i`. A `ConsTail` in its body runs the next call in
+    /// this loop on one Rust frame and keeps the heads, so `(cons x (f ...))`
+    /// recursion needs no stack. Counters, effects and traces come out as if
+    /// each call had nested: only the depth differs.
     fn call_fn(&mut self, i: usize, args: Vec<Value>) -> R<Value> {
         let def = &self.prog.fns[i];
         if args.len() != def.params {
             return Err(RtError::new("arity", format!("{} expects {} args, got {}", def.name, def.params, args.len())));
         }
-        let mut frame = args;
-        frame.resize(def.frame, UNSET);
         if self.depth >= MAX_DEPTH {
             return Err(RtError::new("stack", format!("call depth exceeded {}", MAX_DEPTH)));
         }
         self.depth += 1;
-        self.prof.enter(&def.name, self.depth);
         self.effect_stack.push(i);
-        let res = self.call_body(def, &mut frame);
+        let mut heads = Vec::new();
+        let mut args = args;
+        let res = loop {
+            self.prof.enter(&def.name, self.depth);
+            // ConsTail is compiled only for calls with the right arity.
+            let mut frame = args;
+            frame.resize(def.frame, UNSET);
+            match self.call_body(def, &mut frame) {
+                Ok(Tail::Done(v)) => break Ok(v),
+                Ok(Tail::Again(head, next)) => {
+                    heads.push(head);
+                    args = next;
+                }
+                // The innermost call failed: every call so far was open.
+                Err(e) => break Err((e, heads.len() + 1)),
+            }
+        };
         self.effect_stack.pop();
         self.depth -= 1;
         if self.prof.enabled {
-            self.prof.exit(&def.name);
+            for _ in 0..=heads.len() {
+                self.prof.exit(&def.name);
+            }
         }
-        res.map_err(|mut e| {
-            if e.trace.len() < 16 {
-                e.trace.push(def.name.clone());
+        // The innermost cons runs in the caller of the innermost call.
+        let res = res.and_then(|v| self.cons_heads(heads, v));
+        res.map_err(|(mut e, open)| {
+            for _ in 0..open {
+                if e.trace.len() < 16 {
+                    e.trace.push(def.name.clone());
+                }
             }
             e
         })
     }
 
-    fn call_body(&mut self, def: &Fn, frame: &mut [Value]) -> R<Value> {
+    /// `(cons h0 (cons h1 ... (cons hk v)))`: the conses a `ConsTail` loop
+    /// deferred, innermost first. On error, also how many calls were open.
+    fn cons_heads(&mut self, mut heads: Vec<Value>, v: Value) -> Result<Value, (RtError, usize)> {
+        let Some(last) = heads.pop() else { return Ok(v) };
+        let open = heads.len() + 1;
+        let v = self.builtin(Builtin::Cons, vec![last, v]).map_err(|e| (e, open))?;
+        if heads.is_empty() {
+            return Ok(v);
+        }
+        for _ in &heads {
+            self.prof.builtin(Builtin::Cons);
+        }
+        let Value::Vec(v) = v else { unreachable!("cons returns a vector") };
+        let (v, copied) = Vector::new(heads).concat(v);
+        self.copied(copied);
+        Ok(Value::Vec(v))
+    }
+
+    fn call_body(&mut self, def: &Fn, frame: &mut [Value]) -> R<Tail> {
         for c in &def.requires {
             self.check_contract(def, "requires", c, frame)?;
         }
-        let v = self.eval_seq(&def.body, frame)?;
+        let v = match self.eval_tail_seq(&def.body, frame)? {
+            Tail::Done(v) => v,
+            // Compiled only into functions without ensures.
+            again => return Ok(again),
+        };
         if !def.ensures.is_empty() {
             frame[def.result] = v.clone();
             for c in &def.ensures {
                 self.check_contract(def, "ensures", c, frame)?;
             }
         }
-        Ok(v)
+        Ok(Tail::Done(v))
     }
 
     fn check_contract(&mut self, def: &Fn, which: &'static str, c: &Clause, frame: &mut [Value]) -> R<()> {
