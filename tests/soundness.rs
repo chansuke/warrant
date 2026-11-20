@@ -4,7 +4,8 @@
 
 use warrant::ast::lower;
 use warrant::contracts::{Checks, Mode};
-use warrant::eval::{Interp, Program};
+use warrant::ir::Program;
+use warrant::rt::Interp;
 use warrant::sexp::parse_all_spanned;
 use warrant::solver::Z3;
 use warrant::verify::{self, Status};
