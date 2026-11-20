@@ -1,7 +1,7 @@
 ; Merge sort: the M0 target program.
 ; The spec a human approves is the clauses (:effects / :requires / :ensures / :budget).
 ; The bodies are what an agent writes. Contracts are proved with Z3 where possible
-; (`warrant check`); perm? has no SMT encoding in M1 and stays checked at run time.
+; (`warrant check`), perm? included, so `--contracts auto` checks nothing at run time.
 
 (defn merge [a : (Vec i64) b : (Vec i64)] -> (Vec i64)
   (:effects [])

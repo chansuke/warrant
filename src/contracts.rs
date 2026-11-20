@@ -174,12 +174,12 @@ mod tests {
     }
 
     #[test]
-    fn msort_keeps_only_perm_checked_at_run_time() {
+    fn msort_is_proved_entirely() {
         let Some((m, l)) = levels_of(include_str!("../examples/msort.wrt")) else { return };
         let (merge, msort, gen) = (m.index["merge"], m.index["msort"], m.index["gen"]);
         assert_eq!(names(&l.requires[merge]), ["proved", "proved"]);
-        assert_eq!(names(&l.ensures[merge]), ["proved", "runtime-checked", "proved", "proved"]);
-        assert_eq!(names(&l.ensures[msort]), ["proved", "runtime-checked", "proved"]);
+        assert_eq!(names(&l.ensures[merge]), ["proved"; 4]);
+        assert_eq!(names(&l.ensures[msort]), ["proved"; 3]);
         assert_eq!(names(&l.requires[gen]), ["proved"; 4]);
         assert_eq!(names(&l.ensures[gen]), ["proved"]);
     }
@@ -209,7 +209,7 @@ mod tests {
     fn modes_select_which_clauses_to_check() {
         let Some((m, l)) = levels_of(include_str!("../examples/msort.wrt")) else { return };
         assert_eq!(Checks::new(&m, Mode::Runtime, Some(&l)).count(), (14, 0));
-        assert_eq!(Checks::new(&m, Mode::Auto, Some(&l)).count(), (2, 12));
+        assert_eq!(Checks::new(&m, Mode::Auto, Some(&l)).count(), (0, 14));
         assert_eq!(Checks::new(&m, Mode::Auto, None).count(), (14, 0));
         assert_eq!(Checks::new(&m, Mode::Off, Some(&l)).count(), (0, 14));
     }

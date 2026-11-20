@@ -147,3 +147,121 @@ fn proved_functions_never_fail_at_run_time() {
     // The generator must exercise both sides, or the test proves nothing.
     assert!(proved >= 100 && refuted >= 100, "proved {} refuted {}", proved, refuted);
 }
+
+/// A vector expression over `xs` and `ys`.
+enum VecExpr {
+    Var(&'static str),
+    Lit(Vec<i64>),
+    Concat(Box<VecExpr>, Box<VecExpr>),
+    Cons(i64, Box<VecExpr>),
+    Rest(Box<VecExpr>),
+    FrontHalf(Box<VecExpr>),
+    BackHalf(Box<VecExpr>),
+    Shorter(Box<VecExpr>, Box<VecExpr>),
+}
+
+fn vec_expr(r: &mut Rng, depth: u32) -> VecExpr {
+    use VecExpr::*;
+    if depth == 0 || r.below(4) == 0 {
+        return match r.below(5) {
+            0 => Lit((0..r.below(3)).map(|_| r.int(4)).collect()),
+            1 | 2 => Var("xs"),
+            _ => Var("ys"),
+        };
+    }
+    let sub = |r: &mut Rng| Box::new(vec_expr(r, depth - 1));
+    match r.below(7) {
+        0 | 1 => Concat(sub(r), sub(r)),
+        2 => Cons(r.int(4), sub(r)),
+        3 => Rest(sub(r)),
+        4 => FrontHalf(sub(r)),
+        5 => BackHalf(sub(r)),
+        _ => Shorter(sub(r), sub(r)),
+    }
+}
+
+impl VecExpr {
+    fn src(&self) -> String {
+        use VecExpr::*;
+        match self {
+            Var(v) => v.to_string(),
+            Lit(xs) => format!("[{}]", xs.iter().map(|x| x.to_string()).collect::<Vec<_>>().join(" ")),
+            Concat(a, b) => format!("(concat {} {})", a.src(), b.src()),
+            Cons(x, a) => format!("(cons {} {})", x, a.src()),
+            Rest(a) => format!("(let [v {}] (if (empty? v) v (rest v)))", a.src()),
+            FrontHalf(a) => format!("(let [v {}] (slice v 0 (/ (len v) 2)))", a.src()),
+            BackHalf(a) => format!("(let [v {}] (slice v (/ (len v) 2) (len v)))", a.src()),
+            Shorter(a, b) => format!("(let [v {} w {}] (if (< (len v) (len w)) v w))", a.src(), b.src()),
+        }
+    }
+
+    /// The same multiset written differently: concatenations swapped, conses
+    /// moved to the end, halves reassembled the other way round.
+    fn shuffled(&self) -> String {
+        use VecExpr::*;
+        match self {
+            Concat(a, b) => format!("(concat {} {})", b.shuffled(), a.shuffled()),
+            Cons(x, a) => format!("(concat {} [{}])", a.shuffled(), x),
+            _ => self.src(),
+        }
+    }
+
+    /// Nearly the same multiset: the outermost `rest` or half dropped. Proving
+    /// this one usually means the encoding lost an element.
+    fn unwrapped(&self) -> String {
+        use VecExpr::*;
+        match self {
+            Rest(a) | FrontHalf(a) | BackHalf(a) => a.shuffled(),
+            Concat(a, b) => format!("(concat {} {})", a.unwrapped(), b.shuffled()),
+            Cons(x, a) => format!("(cons {} {})", x, a.unwrapped()),
+            Shorter(a, b) => format!("(let [v {} w {}] (if (< (len v) (len w)) v w))", a.unwrapped(), b.unwrapped()),
+            _ => self.shuffled(),
+        }
+    }
+}
+
+fn vec_lit(r: &mut Rng) -> String {
+    let xs: Vec<String> = (0..r.below(6)).map(|_| r.int(4).to_string()).collect();
+    format!("[{}]", xs.join(" "))
+}
+
+#[test]
+fn proved_permutations_hold_at_run_time() {
+    let Some(z3) = Z3::find(500) else {
+        eprintln!("z3 not found; skipping");
+        return;
+    };
+    let mut r = Rng(0x0bad_5eed_0f9e_4321);
+    let jobs = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let (mut proved, mut unproved) = (0, 0);
+    for _ in 0..200 {
+        let body = vec_expr(&mut r, 3);
+        let other = match r.below(3) {
+            0 => body.shuffled(),
+            1 => body.unwrapped(),
+            _ => vec_expr(&mut r, 3).src(),
+        };
+        let src = format!("(defn f [xs : (Vec i64) ys : (Vec i64)] -> (Vec i64)\n  (:ensures (perm? result {}))\n  {})\n", other, body.src());
+        let (forms, spans) = parse_all_spanned(&src).unwrap();
+        let m = lower(&forms, &spans).unwrap();
+        let Ok(ty) = warrant::types::check(&m) else { panic!("generated an ill-typed program:\n{}", src) };
+        let results = verify::discharge(warrant::vc::generate(&m, &ty), &z3, None, jobs);
+        if !results.iter().all(|v| v.status == Status::Proved) {
+            // Most wrong permutations come back unknown, not failed.
+            unproved += 1;
+            continue;
+        }
+        proved += 1;
+        for _ in 0..30 {
+            let full = format!("{}(defn main [] -> (Vec i64) (f {} {}))\n", src, vec_lit(&mut r), vec_lit(&mut r));
+            let (forms, spans) = parse_all_spanned(&full).unwrap();
+            let m = lower(&forms, &spans).unwrap();
+            let prog = Program::new(&m, &Checks::new(&m, Mode::Runtime, None));
+            if let Err(e) = Interp::new(&prog, false).call_main() {
+                panic!("proved, yet failed with {}:\n{}", e.kind, full);
+            }
+        }
+    }
+    eprintln!("proved {} unproved {}", proved, unproved);
+    assert!(proved >= 50 && unproved >= 50, "proved {} unproved {}", proved, unproved);
+}

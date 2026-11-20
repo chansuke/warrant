@@ -1,7 +1,7 @@
 # CLAUDE.md — Warrant
 
 AIエージェント向けの検証付き並列言語 Warrant の処理系（Rust）。
-設計判断は `docs/DESIGN.md`、次の作業は `docs/HANDOFF_M1.md` を読むこと。
+設計判断は `docs/DESIGN.md`、次の作業は `docs/HANDOFF_M2.md`（設計は `docs/M2_DESIGN.md`）を読むこと。
 
 ## コマンド
 
@@ -62,6 +62,6 @@ formal/lean/check.sh                                       # Lean の証明を�
 - 小さく分けてコミットする。各コミットで `cargo test --release` と `cargo clippy` が通る状態にする
 - コミットメッセージは Conventional Commits（`feat(vc): ...`、`fix:`、`docs:`、`test:`、`perf:`、`refactor:`、`chore:`、`ci:`）で1行
 - 性能に関わる変更は、前後で `warrant bench examples/msort.wrt -n 10` を取り、コミットメッセージに median を書く
-- 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（番号 D13 から）
+- 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（次の番号は D26）
 - 新しい組み込み関数: `builtin.rs` の `Builtin` に足し、`eval.rs` の `builtin()` に実装し、型エラー・境界エラーを S式で返す。コンパイラが match の漏れを指す箇所（型検査、VC 生成など）もすべて埋める
 - 新しい節 `(:xxx ...)`: `ast.rs` の `Lowerer::clause` に足し、`check` の出力と DESIGN.md の言語の節を更新する
