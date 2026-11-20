@@ -139,7 +139,14 @@ impl<'p> Interp<'p> {
                 for (slot, v) in binds {
                     frame[*slot] = self.eval(v, frame)?;
                 }
-                self.eval_seq(body, frame)
+                let r = self.eval_seq(body, frame);
+                // Release the bindings when the scope ends, as M1 drops its
+                // environment, so a dead value holds no memory or reference.
+                // On error the whole frame is dropped anyway.
+                for (slot, _) in binds {
+                    frame[*slot] = UNSET;
+                }
+                r
             }
             Node::Do(es) => self.eval_seq(es, frame),
             Node::And(es) => self.junction(es, frame, false),
