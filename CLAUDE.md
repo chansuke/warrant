@@ -16,6 +16,8 @@ target/release/warrant bench examples/msort.wrt -n 10      # 既定は --contrac
 target/release/warrant spec-diff OLD.wrt NEW.wrt           # 仕様の弱体化があれば終了コード 1
 scripts/bench-compare.sh main                              # main と交互に bench を取り、退行なら終了コード 1
 scripts/flamegraph.sh examples/msort.wrt out.svg           # perf と inferno が必要
+scripts/profile-breakdown.sh examples/msort.wrt out.svg    # 同。コピー・解放・割り当て・解釈の割合を S式で出す
+scripts/bench-sizes.sh "1000 2000 4000 8000" 3            # gen の引数を変えて msort を測る（O(n²) の確認）
 formal/tla/check.sh                                        # TLC で仕様を検査（jar は検証して取得）
 formal/lean/check.sh                                       # Lean の証明をビルドし、sorry がないことを確かめる
 ```
