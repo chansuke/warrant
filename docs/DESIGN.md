@@ -125,7 +125,7 @@ warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 
 - **M0（完了）**: パーサ、Wisp 相互変換、インタプリタ、実行時の契約・エフェクト検査、プロファイラ、ベンチ
 - **M1（完了）**: 静的な型・エフェクト検査／VC 生成 → Z3／証明キャッシュ／証明済み契約の実行時検査の削除／仕様差分ガード（設計は `docs/M1_DESIGN.md`、作業の指示は `docs/HANDOFF_M1.md`、計測は `docs/BENCH.md`）
-- **M2**: 独自ランタイム（Perceus RC ＋ work-stealing）、純粋関数の自動並列化、並列効率（1コア対Nコア）のレポート
+- **M2**: 独自ランタイム（Perceus RC ＋ work-stealing）、純粋関数の自動並列化、並列効率（1コア対Nコア）のレポート（設計は `docs/M2_DESIGN.md`、作業の指示は `docs/HANDOFF_M2.md`）
 - **M3**: 人間は仕様だけを書き、エージェントがマージソートを実装 → 証明 → ベンチ → マージまでのループを完結させる
 
 ## 8. 形式検証とテスト
