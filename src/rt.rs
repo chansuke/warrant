@@ -11,6 +11,7 @@ use crate::eval::RtError;
 use crate::ir::{Clause, Fn, Lambda, Node, Program};
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str};
+use crate::vector::{Copied, Vector};
 use std::rc::Rc;
 use std::time::Instant;
 
@@ -21,7 +22,7 @@ pub enum Value {
     Int(i64),
     Bool(bool),
     Str(Rc<str>),
-    Vec(Rc<Vec<Value>>),
+    Vec(Vector),
     Closure(Rc<Closure>),
     Func(usize),
     Builtin(Builtin),
@@ -44,7 +45,7 @@ impl Program {
             Value::Int(n) => n.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Str(s) => quote_str(s),
-            Value::Vec(xs) => format!("[{}]", xs.iter().map(|x| self.show(x)).collect::<Vec<_>>().join(" ")),
+            Value::Vec(xs) => format!("[{}]", xs.as_slice().iter().map(|x| self.show(x)).collect::<Vec<_>>().join(" ")),
             Value::Closure(_) => "#<fn>".into(),
             Value::Func(i) => format!("#<fn {}>", self.fns[*i].name),
             Value::Builtin(b) => format!("#<builtin {}>", b.name()),
@@ -71,7 +72,7 @@ fn values_eq(a: &Value, b: &Value) -> bool {
         (Value::Int(x), Value::Int(y)) => x == y,
         (Value::Bool(x), Value::Bool(y)) => x == y,
         (Value::Str(x), Value::Str(y)) => x == y,
-        (Value::Vec(x), Value::Vec(y)) => x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| values_eq(p, q)),
+        (Value::Vec(x), Value::Vec(y)) => x.len() == y.len() && x.as_slice().iter().zip(y.as_slice()).all(|(p, q)| values_eq(p, q)),
         _ => false,
     }
 }
@@ -83,10 +84,23 @@ fn int(v: &Value, op: &str) -> R<i64> {
     }
 }
 
-fn vecv(v: &Value, op: &str) -> R<Rc<Vec<Value>>> {
+fn vector<'v>(v: &'v Value, op: &str) -> R<&'v Vector> {
     match v {
-        Value::Vec(x) => Ok(x.clone()),
+        Value::Vec(x) => Ok(x),
         o => Err(RtError::new("type", format!("({} ...) expects vec, got {}", op, type_name(o)))),
+    }
+}
+
+fn vecv<'v>(v: &'v Value, op: &str) -> R<&'v [Value]> {
+    vector(v, op).map(Vector::as_slice)
+}
+
+/// Takes the vector out of an argument, so an in-place update can see that
+/// nothing else refers to its buffer.
+fn take_vec(v: &mut Value, op: &str) -> R<Vector> {
+    match std::mem::replace(v, Value::Bool(false)) {
+        Value::Vec(x) => Ok(x),
+        o => Err(RtError::new("type", format!("({} ...) expects vec, got {}", op, type_name(&o)))),
     }
 }
 
@@ -123,12 +137,13 @@ impl<'p> Interp<'p> {
             Node::Bool(b) => Ok(Value::Bool(*b)),
             Node::Str(s) => Ok(Value::Str(s.clone())),
             Node::Local(s) => Ok(frame[*s].clone()),
+            Node::Move(s) => Ok(std::mem::replace(&mut frame[*s], UNSET)),
             Node::Global(i) => Ok(Value::Func(*i)),
             Node::Builtin(b) => Ok(Value::Builtin(*b)),
             Node::VecLit(items) => {
                 let v = self.eval_all(items, frame)?;
                 self.prof.vec_alloc(v.len());
-                Ok(Value::Vec(Rc::new(v)))
+                Ok(Value::Vec(Vector::new(v)))
             }
             Node::If(c, t, f) => match self.eval(c, frame)? {
                 Value::Bool(true) => self.eval(t, frame),
@@ -281,6 +296,14 @@ impl<'p> Interp<'p> {
         }
     }
 
+    fn copied(&mut self, c: Copied) {
+        if c.alloc {
+            self.prof.vec_alloc(c.elems);
+        } else {
+            self.prof.vec_elems += c.elems as u64;
+        }
+    }
+
     fn check_effect(&self, eff: &str, op: &str) -> R<()> {
         for &i in self.effect_stack.iter().rev() {
             let d = &self.prog.fns[i];
@@ -372,42 +395,39 @@ impl<'p> Interp<'p> {
             }
             B::Slice => {
                 arity(name, &args, 3)?;
-                let v = vecv(&args[0], name)?;
+                let mut args = args;
+                let v = take_vec(&mut args[0], name)?;
                 let (lo, hi) = (int(&args[1], name)?, int(&args[2], name)?);
                 if lo < 0 || hi < lo || hi as usize > v.len() {
                     return Err(RtError::new("bounds", format!("(slice v {} {}) on vec of len {}", lo, hi, v.len())));
                 }
-                let out = v[lo as usize..hi as usize].to_vec();
-                self.prof.vec_alloc(out.len());
-                Ok(Value::Vec(Rc::new(out)))
+                Ok(Value::Vec(v.slice(lo as usize, hi as usize)))
             }
             B::Rest => {
                 arity(name, &args, 1)?;
-                let v = vecv(&args[0], name)?;
+                let mut args = args;
+                let v = take_vec(&mut args[0], name)?;
                 if v.is_empty() {
                     return Err(RtError::new("bounds", "(rest []) on empty vec"));
                 }
-                let out = v[1..].to_vec();
-                self.prof.vec_alloc(out.len());
-                Ok(Value::Vec(Rc::new(out)))
+                Ok(Value::Vec(v.rest()))
             }
             B::Concat => {
                 arity(name, &args, 2)?;
-                let (xs, ys) = (vecv(&args[0], name)?, vecv(&args[1], name)?);
-                let mut out = Vec::with_capacity(xs.len() + ys.len());
-                out.extend(xs.iter().cloned());
-                out.extend(ys.iter().cloned());
-                self.prof.vec_alloc(out.len());
-                Ok(Value::Vec(Rc::new(out)))
+                let mut args = args;
+                let xs = take_vec(&mut args[0], name)?;
+                let (v, copied) = xs.concat(vector(&args[1], name)?);
+                self.copied(copied);
+                Ok(Value::Vec(v))
             }
             B::Cons => {
                 arity(name, &args, 2)?;
-                let v = vecv(&args[1], name)?;
-                let mut out = Vec::with_capacity(v.len() + 1);
-                out.push(args[0].clone());
-                out.extend(v.iter().cloned());
-                self.prof.vec_alloc(out.len());
-                Ok(Value::Vec(Rc::new(out)))
+                let mut args = args;
+                let v = take_vec(&mut args[1], name)?;
+                let x = std::mem::replace(&mut args[0], Value::Bool(false));
+                let (v, copied) = v.cons(x);
+                self.copied(copied);
+                Ok(Value::Vec(v))
             }
             B::Range => {
                 arity(name, &args, 1)?;
@@ -421,11 +441,11 @@ impl<'p> Interp<'p> {
                 }
                 out.extend((0..n).map(Value::Int));
                 self.prof.vec_alloc(out.len());
-                Ok(Value::Vec(Rc::new(out)))
+                Ok(Value::Vec(Vector::new(out)))
             }
             B::Vec => {
                 self.prof.vec_alloc(args.len());
-                Ok(Value::Vec(Rc::new(args)))
+                Ok(Value::Vec(Vector::new(args)))
             }
             B::Map | B::Filter => {
                 arity(name, &args, 2)?;
@@ -445,7 +465,7 @@ impl<'p> Interp<'p> {
                     }
                 }
                 self.prof.vec_alloc(out.len());
-                Ok(Value::Vec(Rc::new(out)))
+                Ok(Value::Vec(Vector::new(out)))
             }
             B::All => {
                 arity(name, &args, 2)?;

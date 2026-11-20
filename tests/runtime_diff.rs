@@ -175,12 +175,13 @@ fn module(src: &str) -> Module {
 type Outcome = Result<String, (String, String, Vec<String>)>;
 
 /// Counters both runtimes keep, compared on errors too. Printed output is
-/// not compared: both write it to stdout directly.
+/// not compared: both write it to stdout directly. `vec-allocs` and
+/// `vec-elems` differ on purpose: the IR runtime shares and reuses buffers.
 fn counters(p: &warrant::profile::Profiler) -> String {
     let clauses: std::collections::BTreeMap<_, _> = p.clauses.iter().map(|(k, v)| (k.clone(), v.checks)).collect();
     format!(
-        "calls {} closures {} builtins {} allocs {} elems {} contract-checks {} clauses {:?}",
-        p.calls, p.closure_calls, p.builtin_calls, p.vec_allocs, p.vec_elems, p.contract_checks, clauses
+        "calls {} closures {} builtins {} contract-checks {} clauses {:?}",
+        p.calls, p.closure_calls, p.builtin_calls, p.contract_checks, clauses
     )
 }
 
