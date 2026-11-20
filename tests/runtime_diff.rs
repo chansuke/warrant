@@ -279,10 +279,12 @@ fn shared_vectors_never_change() {
             "(push [1 2 3] 4)",
             "(let [v [1 2]] (concat (push v 3) (push v 4)))",
             "(keep [1 2 3])",
+            "(alias [1 2 3 4])",
         ] {
             let src = format!(
                 "(defn push [v : (Vec i64) x : i64] -> (Vec i64) (concat v [x]))
                  (defn keep [v : (Vec i64)] -> (Vec i64) (:ensures (= (len result) (+ (len v) 1))) (cons 0 (rest (cons 1 v))))
+                 (defn alias [v : (Vec i64)] -> (Vec i64) (:ensures (= result v) (= (cons 9 (slice result 1 3)) [9 2 3])) v)
                  (defn main [] -> (Vec i64) {})",
                 body
             );
