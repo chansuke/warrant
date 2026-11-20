@@ -84,14 +84,13 @@ fn check_rejects_sum_sq_overflow_with_a_counterexample_before_running() {
 }
 
 #[test]
-fn msort_proves_everything_but_perm() {
+fn msort_proves_every_clause() {
     if !have_z3() {
         return;
     }
     let o = warrant(&["check", "examples/msort.wrt"]);
-    assert!(o.stdout.contains(":proved 37 :failed 0 :unknown 0 :unsupported 2"), "{}", o.stdout);
-    assert_eq!(o.stdout.matches("depends on perm?").count(), 2, "{}", o.stdout);
-    let merge = ":level runtime-checked :clauses (requires [proved proved] ensures [proved runtime-checked proved proved]) :termination assumed)";
+    assert!(o.stdout.contains(":proved 39 :failed 0 :unknown 0 :unsupported 0"), "{}", o.stdout);
+    let merge = ":level proved :clauses (requires [proved proved] ensures [proved proved proved proved]) :termination assumed)";
     assert!(o.stdout.contains(merge), "{}", o.stdout);
     assert!(o.stdout.contains("(gen :effects [] :inferred [] :requires 4 :ensures 1 :level proved"), "{}", o.stdout);
 }
@@ -118,7 +117,7 @@ fn cache_reproves_only_what_an_edit_can_affect() {
         smt_cache_line(&o.stdout)
     };
     assert_eq!(check("c0.wrt", &base), (0, "gen main merge msort".into()));
-    assert_eq!(check("c1.wrt", &base), (37, "".into()));
+    assert_eq!(check("c1.wrt", &base), (39, "".into()));
 
     let body_edit = base.replace("(* i 7919)", "(* i 7917)");
     let (_, reproved) = check("c2.wrt", &body_edit);
@@ -136,7 +135,13 @@ fn auto_erases_proved_clauses_and_keeps_the_rest() {
     }
     let o = warrant(&["run", "examples/msort.wrt", "--report"]);
     assert_eq!(o.code, 0, "{}", o.stdout);
-    assert!(o.stdout.contains("(contracts auto :checked 2 :erased 12"), "{}", o.stdout);
+    assert!(o.stdout.contains("(contracts auto :checked 0 :erased 14"), "{}", o.stdout);
+    // Holds for gen's output but not for every input, so it cannot be proved.
+    let base = std::fs::read_to_string("examples/msort.wrt").unwrap();
+    let unproved = source("auto_unproved.wrt", &base.replace("(perm? result xs) (= (len result) (len xs))", "(perm? result xs) (= (len result) (len xs)) (all? (fn [x] (>= x 0)) result)"));
+    let o = warrant(&["run", &unproved, "--report"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert!(o.stdout.contains("(contracts auto :checked 1 :erased 14"), "{}", o.stdout);
     for (mode, want) in [("runtime", "runtime :checked 14 :erased 0"), ("off", "off :checked 0 :erased 14")] {
         let o = warrant(&["bench", "examples/msort.wrt", "-n", "1", "--contracts", mode]);
         assert!(o.stdout.contains(&format!("(contracts {})", want)), "{}", o.stdout);

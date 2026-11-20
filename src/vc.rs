@@ -4,16 +4,18 @@
 //!
 //! Verification is modular: a call checks the callee's `:requires` and
 //! assumes its `:ensures`, recursive calls included, so results are partial
-//! correctness (termination is assumed). A construct with no encoding
-//! (`perm?`, nested vectors) becomes a fresh unconstrained constant. Assuming
-//! something about such a constant constrains nothing else, so it is sound;
-//! a goal that mentions one is reported `Unsupported` instead of failed and
-//! stays checked at run time.
+//! correctness (termination is assumed). `perm?` compares occurrence counts
+//! (`cnt-VI`), defined for each vector operation the first time a `perm?`
+//! needs it. A construct with no encoding (nested vectors) becomes a fresh
+//! unconstrained constant; assuming something about it constrains nothing
+//! else, so it is sound.
+
+use std::collections::HashMap;
 
 use crate::ast::{Expr, ExprId, ExprKind, FnDecl, FnIdx, LambdaParam, Module};
 use crate::builtin::Builtin;
 use crate::sexp::Pos;
-use crate::smt::{int_lit, quote_sym, sort, str_lit, vec_sort, I64_MIN, MAX_LEN, PRELUDE};
+use crate::smt::{int_lit, quote_sym, sort, str_lit, vec_sort, COUNTS, I64_MIN, MAX_LEN, PRELUDE};
 use crate::types::{Ty, TypeInfo};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -108,10 +110,13 @@ pub fn generate(m: &Module, ty: &TypeInfo) -> Vec<Obligation> {
             binders: 0,
             out: Vec::new(),
             emit: true,
-            approx: Vec::new(),
             inputs: Vec::new(),
             site: Site::Body,
             clause_depth: 0,
+            vec_ops: HashMap::new(),
+            counted: HashMap::new(),
+            defs: Vec::new(),
+            perms: Vec::new(),
         };
         x.function(d);
         out.append(&mut x.out);
@@ -139,6 +144,18 @@ enum FnV<'a> {
 
 type Env<'a> = Vec<(String, V<'a>)>;
 
+/// How an i64 vector term was built, so `perm?` can define its occurrence
+/// counts from its operands'. Fields are SMT terms.
+#[derive(Clone)]
+enum VecOp {
+    Concat(String, String),
+    Cons(String, String),
+    Rest(String),
+    Slice(String, String, String),
+    Lit(Vec<String>),
+    Ite(String, String, String),
+}
+
 /// How deep callee contracts may refer to other contracts before calls in
 /// them are treated as opaque. Stops a contract that calls its own function.
 const MAX_CLAUSE_DEPTH: usize = 2;
@@ -159,12 +176,16 @@ struct Exec<'a> {
     /// False while evaluating a callee's contract as a formula: its own
     /// well-definedness is the callee's obligation, not the caller's.
     emit: bool,
-    /// Constants standing in for constructs with no encoding, with what they
-    /// stand for.
-    approx: Vec<(String, String)>,
     inputs: Vec<(String, Ty)>,
     site: Site,
     clause_depth: usize,
+    vec_ops: HashMap<String, VecOp>,
+    /// The constant naming each i64 vector term whose counts are defined.
+    counted: HashMap<String, String>,
+    /// Definitions of those constants. They hold on every path, so they are
+    /// never guarded by a branch condition.
+    defs: Vec<String>,
+    perms: Vec<String>,
 }
 
 fn vs(t: &Ty) -> Option<&'static str> {
@@ -186,11 +207,20 @@ impl<'a> Exec<'a> {
 
     fn script(&self, goal: &str) -> String {
         let mut s = String::from(PRELUDE);
-        for d in &self.decls {
-            s += d;
-            s.push('\n');
+        // Quantifiers over vectors keep Z3 from finding counterexamples, so
+        // only `perm?` goals get the counts. Leaving definitions out is sound.
+        let counts = self.perms.iter().any(|p| goal.contains(p.as_str()));
+        if counts {
+            s += COUNTS;
         }
-        for f in &self.facts {
+        for d in &self.decls {
+            if counts || !d.starts_with("(declare-const |counted ") {
+                s += d;
+                s.push('\n');
+            }
+        }
+        let defs = if counts { &self.defs[..] } else { &[] };
+        for f in defs.iter().chain(&self.facts) {
             s += &format!("(assert {})\n", f);
         }
         s += &format!("(assert (not {}))\n", goal);
@@ -208,13 +238,7 @@ impl<'a> Exec<'a> {
         if !self.emit {
             return;
         }
-        let mut uses: Vec<&str> = self.approx.iter().filter(|(sym, _)| goal.contains(sym.as_str())).map(|(_, what)| what.as_str()).collect();
-        uses.dedup();
-        let g = if uses.is_empty() {
-            Goal::Script(self.script(&goal))
-        } else {
-            Goal::Unsupported(format!("depends on {} (no SMT encoding in M1)", uses.join(" ")))
-        };
+        let g = Goal::Script(self.script(&goal));
         self.obligation(kind, at, g);
     }
 
@@ -271,12 +295,63 @@ impl<'a> Exec<'a> {
         V::T(name)
     }
 
-    fn approximate(&mut self, what: &str, t: &Ty) -> V<'a> {
-        let v = self.fresh_val(t, what);
-        if let V::T(sym) = &v {
-            self.approx.push((sym.clone(), what.to_string()));
+    /// A constant standing for the i64 vector `term` in `cnt-VI`, with its
+    /// length and occurrence counts defined from how it was built. A
+    /// constant names itself.
+    fn counts_of(&mut self, term: &str) -> String {
+        if let Some(n) = self.counted.get(term) {
+            return n.clone();
         }
-        v
+        if term.starts_with('|') && term.ends_with('|') && term.matches('|').count() == 2 {
+            return term.to_string();
+        }
+        let n = self.fresh_sym("counted");
+        self.decls.push(format!("(declare-const {} VI)", n));
+        // Only the length: equating `n` with a term built from lambdas makes
+        // Z3 give up (unknown) on goals it otherwise proves.
+        self.defs.push(format!("(= (len-VI {}) (len-VI {}))", n, term));
+        self.counted.insert(term.to_string(), n.clone());
+        let x = self.binder();
+        let t = "true".to_string();
+        let (guard, body) = match self.vec_ops.get(term).cloned() {
+            None => return n,
+            Some(VecOp::Concat(a, b)) => (t, format!("(+ (cnt-VI {} {x}) (cnt-VI {} {x}))", self.counts_of(&a), self.counts_of(&b), x = x)),
+            Some(VecOp::Cons(h, v)) => (t, format!("(+ (cnt-VI {} {x}) (ite (= {x} {}) 1 0))", self.counts_of(&v), h, x = x)),
+            Some(VecOp::Rest(v)) => {
+                let c = self.counts_of(&v);
+                (format!("(> (len-VI {}) 0)", c), format!("(- (cnt-VI {c} {x}) (ite (= {x} (select (arr-VI {v}) 0)) 1 0))", c = c, v = v, x = x))
+            }
+            Some(VecOp::Slice(v, lo, hi)) => {
+                let c = self.counts_of(&v);
+                let g = format!("(and (<= 0 {lo}) (<= {lo} {hi}) (<= {hi} (len-VI {c})))", lo = lo, hi = hi, c = c);
+                (g, format!("(rcnt-VI {} {} {} {})", c, lo, hi, x))
+            }
+            Some(VecOp::Lit(items)) => {
+                let ones: Vec<String> = items.iter().map(|i| format!("(ite (= {} {}) 1 0)", x, i)).collect();
+                (t, format!("(+ 0 {})", ones.join(" ")))
+            }
+            Some(VecOp::Ite(c, a, b)) => (t, format!("(ite {} (cnt-VI {} {x}) (cnt-VI {} {x}))", c, self.counts_of(&a), self.counts_of(&b), x = x)),
+        };
+        self.defs.push(format!("(forall (({x} Int)) (! (=> {g} (= (cnt-VI {n} {x}) {b})) :pattern ((cnt-VI {n} {x}))))", x = x, g = guard, n = n, b = body));
+        n
+    }
+
+    /// A Bool constant defined as `(perm? a b)`. Facts mention only the
+    /// constant, so a goal that does not can leave the counts out.
+    fn is_perm(&mut self, a: &str, b: &str) -> String {
+        let (a, b) = (self.counts_of(a), self.counts_of(b));
+        let x = self.binder();
+        let p = self.fresh_sym("perm?");
+        self.decls.push(format!("(declare-const {} Bool)", p));
+        self.defs.push(format!(
+            "(= {p} (forall (({x} Int)) (! (= (cnt-VI {a} {x}) (cnt-VI {b} {x})) :pattern ((cnt-VI {a} {x})) :pattern ((cnt-VI {b} {x})))))",
+            p = p,
+            x = x,
+            a = a,
+            b = b
+        ));
+        self.perms.push(p.clone());
+        p
     }
 
     /// Runs `f` assuming `cond`. Facts `f` learns stay known afterwards,
@@ -415,7 +490,13 @@ impl<'a> Exec<'a> {
                 let tv = self.under(&ct, |x| x.eval(th, env));
                 let fv = self.under(&format!("(not {})", ct), |x| x.eval(el, env));
                 match (tv, fv) {
-                    (V::T(a), V::T(b)) => V::T(format!("(ite {} {} {})", ct, a, b)),
+                    (V::T(a), V::T(b)) => {
+                        let term = format!("(ite {} {} {})", ct, a, b);
+                        if t == Ty::Vec(Box::new(Ty::I64)) {
+                            self.vec_ops.insert(term.clone(), VecOp::Ite(ct, a, b));
+                        }
+                        V::T(term)
+                    }
                     _ => self.fresh_val(&t, "if"),
                 }
             }
@@ -483,7 +564,12 @@ impl<'a> Exec<'a> {
             let V::T(x) = v else { return self.fresh_val(t, "vec") };
             arr = format!("(store {} {} {})", arr, i, x);
         }
-        V::T(format!("(mk-{} {} {})", s, arr, vals.len()))
+        let term = format!("(mk-{} {} {})", s, arr, vals.len());
+        if s == "VI" {
+            let items = vals.into_iter().map(|v| if let V::T(x) = v { x } else { unreachable!("checked above") }).collect();
+            self.vec_ops.insert(term.clone(), VecOp::Lit(items));
+        }
+        V::T(term)
     }
 
     fn builtin(&mut self, b: Builtin, args: Vec<V<'a>>, tys: &[Ty], ret: &Ty, at: Origin) -> V<'a> {
@@ -491,7 +577,6 @@ impl<'a> Exec<'a> {
         match b {
             B::Map | B::Filter | B::Fold | B::All => return self.higher_order(b, args, tys, ret, at),
             B::Vec => return self.vector(args, ret),
-            B::IsPerm => return self.approximate("perm?", ret),
             B::Print => return V::T("true".into()),
             _ => {}
         }
@@ -586,8 +671,21 @@ impl<'a> Exec<'a> {
                 let k = self.binder();
                 format!("(mk-VI (lambda (({k} Int)) {k}) {n})", k = k, n = t(0))
             }
-            B::Map | B::Filter | B::Fold | B::All | B::Vec | B::IsPerm | B::Print => unreachable!("handled above"),
+            B::IsPerm => self.is_perm(t(0), t(1)),
+            B::Map | B::Filter | B::Fold | B::All | B::Vec | B::Print => unreachable!("handled above"),
         };
+        if ret == &Ty::Vec(Box::new(Ty::I64)) {
+            let op = match b {
+                B::Concat => Some(VecOp::Concat(ts[0].clone(), ts[1].clone())),
+                B::Cons => Some(VecOp::Cons(ts[0].clone(), ts[1].clone())),
+                B::Rest => Some(VecOp::Rest(ts[0].clone())),
+                B::Slice => Some(VecOp::Slice(ts[0].clone(), ts[1].clone(), ts[2].clone())),
+                _ => None,
+            };
+            if let Some(op) = op {
+                self.vec_ops.insert(term.clone(), op);
+            }
+        }
         V::T(term)
     }
 
@@ -732,11 +830,34 @@ mod tests {
     }
 
     #[test]
-    fn perm_is_unsupported_and_never_assumed() {
-        let src = "(defn id [xs : (Vec i64)] -> (Vec i64) (:ensures (perm? result xs)) xs)
-                   (defn use [xs : (Vec i64)] -> Bool (:ensures result) (perm? (id xs) xs))";
-        let Some(v) = verdicts(src) else { return };
-        assert_eq!(v.iter().map(|x| x.2.as_str()).collect::<Vec<_>>(), ["unsupported", "unsupported"]);
+    fn perm_is_proved_through_vector_operations() {
+        assert_all("(defn id [xs : (Vec i64)] -> (Vec i64) (:ensures (perm? result xs)) xs)", "proved");
+        assert_all("(defn swap [a : (Vec i64) b : (Vec i64)] -> (Vec i64) (:ensures (perm? result (concat a b))) (concat b a))", "proved");
+        assert_all(
+            "(defn halves [xs : (Vec i64)] -> (Vec i64) (:ensures (perm? result xs))
+               (let [h (/ (len xs) 2)] (concat (slice xs h (len xs)) (slice xs 0 h))))",
+            "proved",
+        );
+        assert_all(
+            "(defn rot [xs : (Vec i64)] -> (Vec i64) (:ensures (perm? result xs)) (if (empty? xs) xs (concat (rest xs) [(get xs 0)])))",
+            "proved",
+        );
+        assert_all(
+            "(defn id [xs : (Vec i64)] -> (Vec i64) (:ensures (perm? result xs)) xs)
+             (defn use [xs : (Vec i64)] -> Bool (:ensures result) (perm? (cons 1 (id xs)) (cons 1 xs)))",
+            "proved",
+        );
+    }
+
+    #[test]
+    fn wrong_perm_is_never_proved() {
+        // Against a literal Z3 finds no model for the counts and says unknown.
+        for (body, want) in [("(cons 0 xs)", "failed (xs ["), ("(rest xs)", "failed (xs ["), ("(concat xs xs)", "failed (xs ["), ("[1 2]", "unknown")] {
+            let src = format!("(defn f [xs : (Vec i64)] -> (Vec i64) (:requires (> (len xs) 0)) (:ensures (perm? result xs)) {})", body);
+            let Some(v) = verdicts(&src) else { return };
+            let ens: Vec<&String> = v.iter().filter(|x| x.1 == "ensures :clause 0").map(|x| &x.2).collect();
+            assert!(ens.len() == 1 && ens[0].starts_with(want), "{} -> {:?}", body, v);
+        }
     }
 
     #[test]

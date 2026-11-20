@@ -94,6 +94,17 @@ pub const PRELUDE: &str = r#"(declare-datatype VI ((mk-VI (arr-VI (Array Int Int
        (forall ((i Int)) (=> (and (<= 0 i) (< i (len-VS a))) (= (select (arr-VS a) i) (select (arr-VS b) i))))))
 "#;
 
+/// Occurrence counts for `perm?`: `(cnt-VI v x)` is how often `x` occurs in
+/// `v`, `(rcnt-VI v lo hi x)` the same within `[lo, hi)`.
+pub const COUNTS: &str = r#"(declare-fun cnt-VI (VI Int) Int)
+(declare-fun rcnt-VI (VI Int Int Int) Int)
+(assert (forall ((v VI) (x Int)) (! (= (cnt-VI v x) (rcnt-VI v 0 (len-VI v) x)) :pattern ((cnt-VI v x)))))
+(assert (forall ((v VI) (a Int) (x Int)) (! (= (rcnt-VI v a a x) 0) :pattern ((rcnt-VI v a a x)))))
+(assert (forall ((v VI) (a Int) (b Int) (c Int) (x Int))
+  (! (=> (and (<= 0 a) (<= a b) (<= b c) (<= c (len-VI v))) (= (+ (rcnt-VI v a b x) (rcnt-VI v b c x)) (rcnt-VI v a c x)))
+     :pattern ((rcnt-VI v a b x) (rcnt-VI v b c x)))))
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
