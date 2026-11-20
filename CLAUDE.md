@@ -40,13 +40,16 @@ formal/lean/check.sh                                       # Lean の証明を�
 | `src/contracts.rs` | 節ごとの検証レベル（proved / runtime-checked）と、モードから実行時に検査する節を決める `Checks` |
 | `src/specdiff.rs` | 仕様差分ガード。節ごとの変更と判定（weakened / strengthened / refined / new）、精緻化の SMT 証明 |
 | `src/cache.rs` | VC 単位の証明キャッシュ（既定 `~/.cache/warrant/proofs`、キーはソルバの fingerprint とスクリプト） |
-| `src/eval.rs` | `Program::new`（`Module` から作る）、`Interp`（評価、契約、エフェクト、組み込み関数） |
+| `src/ir.rs` | 実行用 IR。`Program::new` が `Module` をスロットの環境にコンパイルし、`Checks` が残す節だけを含める |
+| `src/rt.rs` | IR の評価器 `Interp`（契約、エフェクト、組み込み関数）。`run` / `bench` はこれを使う |
+| `src/eval.rs` | M1 のインタプリタ（`Sexp` を評価する）。差分テストの oracle としてだけ残し、M2-7 で消す。`RtError` もここにある |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |
 | `src/main.rs` | CLI。大きいスタックのスレッドで実行し、終了コードを返す |
 | `tests/m0.rs` | 例題の往復・実行・エラー種別の統合テスト |
 | `tests/cli.rs` | バイナリを動かす出力形式・終了コードのテスト |
 | `tests/properties.rs` | ランダムな正規形の往復、フロントエンドが panic しないこと |
 | `tests/soundness.rs` | proved な関数が実行時に失敗しないことの差分テスト（z3 が必要） |
+| `tests/runtime_diff.rs` | IR のランタイムと M1 のインタプリタの差分テスト（値、エラー、プロファイラのカウンタ） |
 | `formal/` | Lean（契約省略の健全性）と TLA+（証明キャッシュ、並列 discharge） |
 | `examples/` | `msort`（目標プログラム）、`sum_sq`（オーバーフロー）、`effect_leak`（エフェクト漏れ） |
 
@@ -64,6 +67,6 @@ formal/lean/check.sh                                       # Lean の証明を�
 - 小さく分けてコミットする。各コミットで `cargo test --release` と `cargo clippy` が通る状態にする
 - コミットメッセージは Conventional Commits（`feat(vc): ...`、`fix:`、`docs:`、`test:`、`perf:`、`refactor:`、`chore:`、`ci:`）で1行
 - 性能に関わる変更は、前後で `warrant bench examples/msort.wrt -n 10` を取り、コミットメッセージに median を書く
-- 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（次の番号は D26）
-- 新しい組み込み関数: `builtin.rs` の `Builtin` に足し、`eval.rs` の `builtin()` に実装し、型エラー・境界エラーを S式で返す。コンパイラが match の漏れを指す箇所（型検査、VC 生成など）もすべて埋める
+- 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（次の番号は D28）
+- 新しい組み込み関数: `builtin.rs` の `Builtin` に足し、`rt.rs` の `builtin()` に実装し（M2-7 までは `eval.rs` にも同じものを足す）、型エラー・境界エラーを S式で返す。コンパイラが match の漏れを指す箇所（型検査、VC 生成など）もすべて埋める
 - 新しい節 `(:xxx ...)`: `ast.rs` の `Lowerer::clause` に足し、`check` の出力と DESIGN.md の言語の節を更新する
