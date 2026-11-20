@@ -401,7 +401,9 @@ impl<'p> Interp<'p> {
                 if lo < 0 || hi < lo || hi as usize > v.len() {
                     return Err(RtError::new("bounds", format!("(slice v {} {}) on vec of len {}", lo, hi, v.len())));
                 }
-                Ok(Value::Vec(v.slice(lo as usize, hi as usize)))
+                let (v, copied) = v.slice(lo as usize, hi as usize);
+                self.copied(copied);
+                Ok(Value::Vec(v))
             }
             B::Rest => {
                 arity(name, &args, 1)?;
@@ -410,13 +412,15 @@ impl<'p> Interp<'p> {
                 if v.is_empty() {
                     return Err(RtError::new("bounds", "(rest []) on empty vec"));
                 }
-                Ok(Value::Vec(v.rest()))
+                let (v, copied) = v.rest();
+                self.copied(copied);
+                Ok(Value::Vec(v))
             }
             B::Concat => {
                 arity(name, &args, 2)?;
                 let mut args = args;
                 let xs = take_vec(&mut args[0], name)?;
-                let (v, copied) = xs.concat(vector(&args[1], name)?);
+                let (v, copied) = xs.concat(take_vec(&mut args[1], name)?);
                 self.copied(copied);
                 Ok(Value::Vec(v))
             }
@@ -481,8 +485,10 @@ impl<'p> Interp<'p> {
             }
             B::Fold => {
                 arity(name, &args, 3)?;
+                let mut args = args;
+                // Taken out of the arguments so the accumulator is not shared.
+                let mut acc = std::mem::replace(&mut args[1], Value::Bool(false));
                 let v = vecv(&args[2], name)?;
-                let mut acc = args[1].clone();
                 for x in v.iter() {
                     acc = self.apply(&args[0], vec![acc, x.clone()])?;
                 }
