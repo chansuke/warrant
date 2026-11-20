@@ -175,12 +175,13 @@ fn module(src: &str) -> Module {
 type Outcome = Result<String, (String, String, Vec<String>)>;
 
 /// Counters both runtimes keep, compared on errors too. Printed output is
-/// not compared: both write it to stdout directly.
+/// not compared: both write it to stdout directly. `vec-allocs` and
+/// `vec-elems` differ on purpose: the IR runtime shares and reuses buffers.
 fn counters(p: &warrant::profile::Profiler) -> String {
     let clauses: std::collections::BTreeMap<_, _> = p.clauses.iter().map(|(k, v)| (k.clone(), v.checks)).collect();
     format!(
-        "calls {} closures {} builtins {} allocs {} elems {} contract-checks {} clauses {:?}",
-        p.calls, p.closure_calls, p.builtin_calls, p.vec_allocs, p.vec_elems, p.contract_checks, clauses
+        "calls {} closures {} builtins {} contract-checks {} clauses {:?}",
+        p.calls, p.closure_calls, p.builtin_calls, p.contract_checks, clauses
     )
 }
 
@@ -255,6 +256,39 @@ fn fixed_cases_agree() {
             ("(defn main [] -> i64 ((do (print \"callee\") 0) (do (print \"arg\") (/ 1 0))))", error("div-zero", "(/ 1 0)", &["main"])),
         ] {
             assert_eq!(same(src), want, "{}", src);
+        }
+    });
+}
+
+/// The IR runtime updates a vector in place only when nothing else refers to
+/// its buffer. Each case shares a buffer one way and then writes through one
+/// of the sharers; the M1 interpreter, which always copies, is the reference.
+#[test]
+fn shared_vectors_never_change() {
+    on_big_stack(|| {
+        for body in [
+            "(let [v [1 2 3] w (rest v) x (cons 9 w) y (cons 8 w)] (concat (concat x y) (concat w v)))",
+            "(let [a (rest [1 2 3]) b (concat a [4]) c (concat a [5])] (concat b c))",
+            "(let [v [1 2 3 4] s (slice v 0 2) t (concat s [9])] (concat t v))",
+            "(let [v [1 2 3 4] s (slice v 0 2)] (concat s [9]))",
+            "(let [v [1 2 3 4] s (slice v 1 3) t (cons 0 s)] (concat t (slice v 2 4)))",
+            "(let [v [1 2] f (fn [] v) w (cons 0 v)] (concat (f) w))",
+            "(let [v [1 2] f (fn [] (cons 7 v))] (concat (f) (concat (f) v)))",
+            "(let [v (range 4)] (if (empty? v) v (concat (rest v) (rest v))))",
+            "(let [v [5 6]] (concat (map (fn [x] (+ x (len v))) v) v))",
+            "(push [1 2 3] 4)",
+            "(let [v [1 2]] (concat (push v 3) (push v 4)))",
+            "(keep [1 2 3])",
+            "(alias [1 2 3 4])",
+        ] {
+            let src = format!(
+                "(defn push [v : (Vec i64) x : i64] -> (Vec i64) (concat v [x]))
+                 (defn keep [v : (Vec i64)] -> (Vec i64) (:ensures (= (len result) (+ (len v) 1))) (cons 0 (rest (cons 1 v))))
+                 (defn alias [v : (Vec i64)] -> (Vec i64) (:ensures (= result v) (= (cons 9 (slice result 1 3)) [9 2 3])) v)
+                 (defn main [] -> (Vec i64) {})",
+                body
+            );
+            assert!(same(&src).is_ok(), "{}", src);
         }
     });
 }

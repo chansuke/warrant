@@ -17,6 +17,9 @@ pub enum Node {
     Bool(bool),
     Str(Rc<str>),
     Local(Slot),
+    /// The last read of a slot on its path: takes the value out, so a vector
+    /// read here can be updated in place (M2-2).
+    Move(Slot),
     /// A top-level function used as a value.
     Global(FnIdx),
     Builtin(Builtin),
@@ -85,10 +88,16 @@ impl Program {
                         .map(|(index, cl)| Clause { index, src: cl.src.clone(), node: c.expr(&cl.expr) })
                         .collect()
                 };
-                let requires = kept(&mut c, &d.spec.requires, &checks.requires[i]);
-                let body = c.exprs(&d.body);
+                let mut requires = kept(&mut c, &d.spec.requires, &checks.requires[i]);
+                let mut body = c.exprs(&d.body);
                 let result = c.bind("result");
-                let ensures = kept(&mut c, &d.spec.ensures, &checks.ensures[i]);
+                let mut ensures = kept(&mut c, &d.spec.ensures, &checks.ensures[i]);
+                // Clauses run before and after the body in this order, so a
+                // parameter an ensures reads is never moved by the body.
+                let mut live = vec![false; c.frames[0].size];
+                for n in ensures.iter_mut().rev().map(|c| &mut c.node).chain(body.iter_mut().rev()).chain(requires.iter_mut().rev().map(|c| &mut c.node)) {
+                    last_uses(n, &mut live);
+                }
                 Fn {
                     name: d.name.clone(),
                     params: d.params.len(),
@@ -177,8 +186,12 @@ impl Compiler {
             ExprKind::Lambda(ps, body) => {
                 self.frames.push(Frame::default());
                 let params = ps.iter().map(|p| self.bind(&p.name)).collect();
-                let body = self.exprs(body);
+                let mut body = self.exprs(body);
                 let f = self.frames.pop().expect("pushed above");
+                let mut live = vec![false; f.size];
+                for n in body.iter_mut().rev() {
+                    last_uses(n, &mut live);
+                }
                 Node::Lambda(Rc::new(Lambda { params, captures: f.captures, frame: f.size, body }))
             }
             ExprKind::Do(es) => Node::Do(self.exprs(es)),
@@ -193,5 +206,55 @@ impl Compiler {
                 }
             },
         }
+    }
+}
+
+/// Walks `n` backwards from the end of its evaluation, where `live[s]` says
+/// slot `s` is read later, and turns each read that is the last on its path
+/// into a `Move`. Leaves `live` as it is before `n` runs. No node runs twice
+/// in one frame, so a moved slot is never read again.
+fn last_uses(n: &mut Node, live: &mut [bool]) {
+    match n {
+        Node::Int(_) | Node::Bool(_) | Node::Str(_) | Node::Global(_) | Node::Builtin(_) | Node::Move(_) => {}
+        Node::Local(s) => {
+            let s = *s;
+            if !live[s] {
+                live[s] = true;
+                *n = Node::Move(s);
+            }
+        }
+        Node::If(c, t, f) => {
+            let mut other = live.to_vec();
+            last_uses(t, live);
+            last_uses(f, &mut other);
+            for (l, o) in live.iter_mut().zip(other) {
+                *l |= o;
+            }
+            last_uses(c, live);
+        }
+        Node::Let(binds, body) => {
+            seq(body, live);
+            for (slot, v) in binds.iter_mut().rev() {
+                live[*slot] = false;
+                last_uses(v, live);
+            }
+        }
+        Node::VecLit(es) | Node::Do(es) | Node::And(es) | Node::Or(es) | Node::CallGlobal(_, es) | Node::CallBuiltin(_, es) => seq(es, live),
+        Node::CallValue(f, args) => {
+            seq(args, live);
+            last_uses(f, live);
+        }
+        // Creating a closure copies the captured slots, which reads them.
+        Node::Lambda(l) => {
+            for (outer, _) in &l.captures {
+                live[*outer] = true;
+            }
+        }
+    }
+}
+
+fn seq(es: &mut [Node], live: &mut [bool]) {
+    for e in es.iter_mut().rev() {
+        last_uses(e, live);
     }
 }
