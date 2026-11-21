@@ -33,6 +33,9 @@ pub enum Node {
     CallGlobal(FnIdx, Vec<Node>),
     CallBuiltin(Builtin, Vec<Node>),
     CallValue(Box<Node>, Vec<Node>),
+    /// `(cons head (f args...))` in tail position of `f` itself, which has
+    /// no ensures to check (D29). The runtime loops instead of recursing.
+    ConsTail(Box<Node>, Vec<Node>),
 }
 
 pub struct Lambda {
@@ -97,6 +100,13 @@ impl Program {
                 let mut live = vec![false; c.frames[0].size];
                 for n in ensures.iter_mut().rev().map(|c| &mut c.node).chain(body.iter_mut().rev()).chain(requires.iter_mut().rev().map(|c| &mut c.node)) {
                     last_uses(n, &mut live);
+                }
+                // An ensures needs the result of each recursive call, so a
+                // function that checks one recurses as written.
+                if ensures.is_empty() {
+                    if let Some(n) = body.last_mut() {
+                        cons_tails(n, i, d.params.len());
+                    }
                 }
                 Fn {
                     name: d.name.clone(),
@@ -240,7 +250,7 @@ fn last_uses(n: &mut Node, live: &mut [bool]) {
             }
         }
         Node::VecLit(es) | Node::Do(es) | Node::And(es) | Node::Or(es) | Node::CallGlobal(_, es) | Node::CallBuiltin(_, es) => seq(es, live),
-        Node::CallValue(f, args) => {
+        Node::CallValue(f, args) | Node::ConsTail(f, args) => {
             seq(args, live);
             last_uses(f, live);
         }
@@ -250,6 +260,29 @@ fn last_uses(n: &mut Node, live: &mut [bool]) {
                 live[*outer] = true;
             }
         }
+    }
+}
+
+/// Turns each `(cons head (me args...))` in tail position of `n` into a
+/// `ConsTail`. Runs after `last_uses`, which it leaves valid: the head and
+/// the arguments are evaluated in the same order as before.
+fn cons_tails(n: &mut Node, me: FnIdx, params: usize) {
+    match n {
+        Node::If(_, t, f) => {
+            cons_tails(t, me, params);
+            cons_tails(f, me, params);
+        }
+        Node::Let(_, body) | Node::Do(body) => {
+            if let Some(last) = body.last_mut() {
+                cons_tails(last, me, params);
+            }
+        }
+        Node::CallBuiltin(Builtin::Cons, args) if matches!(args.as_slice(), [_, Node::CallGlobal(f, a)] if *f == me && a.len() == params) => {
+            let Some(Node::CallGlobal(_, call)) = args.pop() else { unreachable!("matched above") };
+            let head = args.pop().expect("matched above");
+            *n = Node::ConsTail(Box::new(head), call);
+        }
+        _ => {}
     }
 }
 

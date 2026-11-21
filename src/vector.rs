@@ -30,7 +30,20 @@ impl Copied {
     const NOTHING: Copied = Copied { alloc: false, elems: 0 };
 }
 
+impl Drop for Vector {
+    fn drop(&mut self) {
+        if let Some(buf) = Rc::get_mut(&mut self.buf) {
+            crate::rt::free_nested(buf);
+        }
+    }
+}
+
 impl Vector {
+    /// The buffer, when no other value refers to it.
+    pub(crate) fn unique_buf(&mut self) -> Option<&mut Vec<Value>> {
+        Rc::get_mut(&mut self.buf)
+    }
+
     pub fn new(items: Vec<Value>) -> Vector {
         let len = items.len();
         Vector { buf: Rc::new(items), start: 0, len }
