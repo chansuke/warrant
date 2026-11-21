@@ -381,3 +381,29 @@ fn cons_tail_recursion_needs_no_depth() {
         assert_eq!(run(Mode::Runtime).0, Err("stack".into()));
     });
 }
+
+/// Freeing a deeply nested value must not recurse once per level. The
+/// ConsTail loop also frees the frames it kept apart in one go at the end.
+#[test]
+fn deep_values_free_without_recursion() {
+    let srcs = [
+        "(defn main [] -> i64 (len (fold (fn [xs k] [xs]) [] (range 1000000))))",
+        "(defn main [] -> i64 (let [f (fold (fn [g k] (fn [] (g))) (fn [] 0) (range 1000000))] 1))",
+        "(defn f [n : i64 acc : (Vec i64)] -> (Vec i64) (if (= n 0) [] (cons n (f (- n 1) (fold (fn [xs k] [xs]) ((fn [] acc)) (range 4096))))))
+         (defn main [] -> i64 (len (f 256 [])))",
+    ];
+    // Far smaller than the CLI's 1 GiB, so recursion per level overflows.
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(move || {
+            for src in srcs {
+                let m = module(src);
+                let prog = warrant::ir::Program::new(&m, &Checks::new(&m, Mode::Off, None));
+                let r = warrant::rt::Interp::new(&prog, false).call_main().map(|v| prog.show(&v));
+                assert!(r.is_ok(), "{}", src);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

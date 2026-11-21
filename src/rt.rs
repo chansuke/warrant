@@ -33,6 +33,39 @@ pub struct Closure {
     captured: Vec<Value>,
 }
 
+impl Drop for Closure {
+    fn drop(&mut self) {
+        free_nested(&mut self.captured);
+    }
+}
+
+/// Drops `values` with a work list instead of recursion when they own
+/// vectors or closures, so freeing a deeply nested value (a vector of a
+/// vector of ..., or the buffers a ConsTail loop releases at once) never
+/// overflows the stack. Values another reference still holds are left alone.
+pub(crate) fn free_nested(values: &mut Vec<Value>) {
+    if !values.iter().any(|v| matches!(v, Value::Vec(_) | Value::Closure(_))) {
+        return;
+    }
+    let mut work = std::mem::take(values);
+    while let Some(v) = work.pop() {
+        match v {
+            Value::Vec(mut xs) => {
+                if let Some(buf) = xs.unique_buf() {
+                    work.append(buf);
+                }
+            }
+            Value::Closure(mut c) => {
+                if let Some(c) = Rc::get_mut(&mut c) {
+                    work.append(&mut c.captured);
+                }
+            }
+            _ => {}
+        }
+        // `v` is dropped here with nothing left inside it.
+    }
+}
+
 type R<T> = Result<T, RtError>;
 
 /// How a function body in tail position ends.
@@ -327,13 +360,15 @@ impl<'p> Interp<'p> {
         };
         self.effect_stack.pop();
         self.depth -= 1;
+        let calls = heads.len() + 1;
+        // The innermost cons runs in the caller of the innermost call. The
+        // profiler's frames stay open so the time counts as this function's.
+        let res = res.and_then(|v| self.cons_heads(heads, v));
         if self.prof.enabled {
-            for _ in 0..=heads.len() {
+            for _ in 0..calls {
                 self.prof.exit(&def.name);
             }
         }
-        // The innermost cons runs in the caller of the innermost call.
-        let res = res.and_then(|v| self.cons_heads(heads, v));
         res.map_err(|(mut e, open)| {
             for _ in 0..open {
                 if e.trace.len() < 16 {
