@@ -331,3 +331,79 @@ fn generated_programs_agree() {
         }
     });
 }
+
+/// `(cons x (f ...))` in tail position of `f` runs as a loop (D29). Values,
+/// errors, traces and counters must stay as if every call had nested.
+#[test]
+fn cons_tail_recursion_agrees() {
+    on_big_stack(|| {
+        let up = |spec: &str, base: &str, head: &str| {
+            format!("(defn up [n : i64] -> (Vec i64) {} (if (= n 0) {} (cons {} (up (- n 1))))) (defn main [] -> (Vec i64) (up 5))", spec, base, head)
+        };
+        // Six calls of `up` were open, then `main`.
+        let up5 = ["up", "up", "up", "up", "up", "up", "main"];
+        assert_eq!(same(&up("", "[]", "n")).unwrap(), "[5 4 3 2 1]");
+        assert_eq!(same(&up("", "[0]", "(* n 10)")).unwrap(), "[50 40 30 20 10 0]");
+        assert_eq!(same(&up("(:ensures (= (len result) n))", "[]", "n")).unwrap(), "[5 4 3 2 1]");
+        assert_eq!(same(&up("(:ensures (> (len result) n))", "[]", "n")), error("contract", "ensures failed in up: (> (len result) n)", &up5));
+        assert_eq!(same(&up("", "(/ 1 0)", "n")), error("div-zero", "(/ 1 0)", &up5));
+        assert_eq!(same(&up("(:requires (not (= n 2)))", "[]", "n")), error("contract", "requires failed in up: (not (= n 2))", &["up", "up", "up", "up", "main"]));
+        assert_eq!(same(&up("", "[]", "(/ 10 (- n 2))")), error("div-zero", "(/ 10 0)", &["up", "up", "up", "up", "main"]));
+        // The innermost cons runs in the caller of the call that returned 7.
+        assert_eq!(same(&up("", "7", "n")), error("type", "(cons ...) expects vec, got i64", &["up", "up", "up", "up", "up", "main"]));
+        assert_eq!(same(&up("(:effects [])", "[]", "(do (print n) n)")), error("effect", "`print` performs effect io, but `up` declares (:effects [])", &["up", "main"]));
+        for src in [
+            "(defn up [n : i64] -> (Vec i64) (let [m (- n 1)] (do (+ n 1) (if (< m 0) [] (cons n (up m)))))) (defn main [] -> (Vec i64) (up 4))",
+            "(defn zip [a : (Vec i64) b : (Vec i64)] -> (Vec i64) (if (empty? a) b (if (empty? b) a (if (< (get a 0) (get b 0)) (cons (get a 0) (zip (rest a) b)) (cons (get b 0) (zip a (rest b))))))) (defn main [] -> (Vec i64) (zip [1 4 6] [2 3 5 7]))",
+            "(defn up [n : i64] -> (Vec i64) (if (= n 0) [] (cons (len (up (- n 1))) (up (- n 1))))) (defn main [] -> (Vec i64) (up 4))",
+            "(defn up [n : i64] -> (Vec i64) (if (= n 0) [] (cons n (up)))) (defn main [] -> (Vec i64) (up 3))",
+            "(defn up [n : i64] -> (Vec i64) (if (= n 0) [] (cons n (up (- n 1))))) (defn main [] -> i64 (len (map (fn [k] (len (up k))) (up 30))))",
+        ] {
+            let _ = same(src);
+        }
+    });
+}
+
+/// A cons-tail recursion deeper than the depth limit runs in constant depth
+/// when no ensures is checked, and still stops at the limit when one is.
+#[test]
+fn cons_tail_recursion_needs_no_depth() {
+    on_big_stack(|| {
+        let src = "(defn up [n : i64] -> (Vec i64) (:ensures (= (len result) n)) (if (= n 0) [] (cons n (up (- n 1))))) (defn main [] -> i64 (len (up 300000)))";
+        let m = module(src);
+        let run = |mode| {
+            let prog = warrant::ir::Program::new(&m, &Checks::new(&m, mode, None));
+            let mut it = warrant::rt::Interp::new(&prog, false);
+            let r = it.call_main().map(|v| prog.show(&v)).map_err(|e| e.kind.to_string());
+            (r, it.prof.max_depth)
+        };
+        assert_eq!(run(Mode::Off), (Ok("300000".into()), 2));
+        assert_eq!(run(Mode::Runtime).0, Err("stack".into()));
+    });
+}
+
+/// Freeing a deeply nested value must not recurse once per level. The
+/// ConsTail loop also frees the frames it kept apart in one go at the end.
+#[test]
+fn deep_values_free_without_recursion() {
+    let srcs = [
+        "(defn main [] -> i64 (len (fold (fn [xs k] [xs]) [] (range 1000000))))",
+        "(defn main [] -> i64 (let [f (fold (fn [g k] (fn [] (g))) (fn [] 0) (range 1000000))] 1))",
+        "(defn f [n : i64 acc : (Vec i64)] -> (Vec i64) (if (= n 0) [] (cons n (f (- n 1) (fold (fn [xs k] [xs]) ((fn [] acc)) (range 4096))))))
+         (defn main [] -> i64 (len (f 256 [])))",
+    ];
+    // Far smaller than the CLI's 1 GiB, so recursion per level overflows.
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(move || {
+            for src in srcs {
+                let m = module(src);
+                let prog = warrant::ir::Program::new(&m, &Checks::new(&m, Mode::Off, None));
+                let r = warrant::rt::Interp::new(&prog, false).call_main().map(|v| prog.show(&v));
+                assert!(r.is_ok(), "{}", src);
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

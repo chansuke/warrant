@@ -68,6 +68,6 @@ formal/lean/check.sh                                       # Lean の証明を�
 - 小さく分けてコミットする。各コミットで `cargo test --release` と `cargo clippy` が通る状態にする
 - コミットメッセージは Conventional Commits（`feat(vc): ...`、`fix:`、`docs:`、`test:`、`perf:`、`refactor:`、`chore:`、`ci:`）で1行
 - 性能に関わる変更は、前後で `warrant bench examples/msort.wrt -n 10` を取り、コミットメッセージに median を書く
-- 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（次の番号は D28）
+- 設計判断を変える・新しく決めるときは `docs/DESIGN.md` の Decision Log に追記する（次の番号は D30）
 - 新しい組み込み関数: `builtin.rs` の `Builtin` に足し、`rt.rs` の `builtin()` に実装し（M2-7 までは `eval.rs` にも同じものを足す）、型エラー・境界エラーを S式で返す。コンパイラが match の漏れを指す箇所（型検査、VC 生成など）もすべて埋める
 - 新しい節 `(:xxx ...)`: `ast.rs` の `Lowerer::clause` に足し、`check` の出力と DESIGN.md の言語の節を更新する
