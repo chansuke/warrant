@@ -230,6 +230,17 @@ mod tests {
         assert_eq!(got, Outcome::Failed { model: vec![("x".into(), "-5".into())] });
     }
 
+    /// `run` reads z3's answer without a clock of its own and relies on
+    /// `-t:` to stop z3. The smallest solution of x^3 + y^3 + z^3 = 33 has
+    /// 16-digit numbers, far beyond what z3 finds in 200 ms.
+    #[test]
+    fn z3_gives_up_at_the_timeout_on_a_problem_it_cannot_solve() {
+        let Some(z) = Z3::find_for_test(200) else { return };
+        let script =
+            "(declare-const x Int)\n(declare-const y Int)\n(declare-const z Int)\n(assert (= (+ (* x x x) (* y y y) (* z z z)) 33))";
+        assert_eq!(z.check(script, &[]).unwrap(), Outcome::Unknown { reason: "timeout".into() });
+    }
+
     #[test]
     fn script_errors_are_unknown_not_proved() {
         let Some(z) = z3() else { return };
