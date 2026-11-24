@@ -7,8 +7,7 @@
 //! stack declares effects without `io`. Integer arithmetic is checked.
 
 use crate::builtin::Builtin;
-use crate::diag::ErrorKind;
-use crate::eval::RtError;
+use crate::diag::{ErrorKind, RtError};
 use crate::ir::{Clause, Fn, Node, Program};
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str};
