@@ -40,6 +40,44 @@ Proof options (check, and run/bench with --contracts auto, the default):
   --cache-dir D (default: $XDG_CACHE_HOME/warrant/proofs or ~/.cache/warrant/proofs)
 --no-contracts is --contracts off. FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
 
+/// The options each command takes. `true` marks one that takes a value.
+/// `opt_value` and flag lookups read only what `check_opts` let through, so a
+/// new option goes here first.
+const PROOF_OPTS: &[(&str, bool)] = &[("--timeout-ms", true), ("--jobs", true), ("--no-cache", false), ("--cache-dir", true)];
+const RUN_OPTS: &[(&str, bool)] = &[("--report", false), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false)];
+const BENCH_OPTS: &[(&str, bool)] = &[("-n", true), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false)];
+const FMT_OPTS: &[(&str, bool)] = &[("--to", true)];
+const SPEC_DIFF_OPTS: &[(&str, bool)] = &[("--no-smt", false), ("--timeout-ms", true)];
+
+fn known_opts(cmd: &str) -> Vec<(&'static str, bool)> {
+    let own: &[(&str, bool)] = match cmd {
+        "run" => RUN_OPTS,
+        "bench" => BENCH_OPTS,
+        "fmt" => FMT_OPTS,
+        "spec-diff" => SPEC_DIFF_OPTS,
+        _ => &[],
+    };
+    let proof: &[(&str, bool)] = if matches!(cmd, "run" | "check" | "bench") { PROOF_OPTS } else { &[] };
+    own.iter().chain(proof).copied().collect()
+}
+
+/// Rejects an option `cmd` does not take, and a value option at the end.
+fn check_opts(cmd: &str, opts: &[String]) -> Result<(), i32> {
+    let known = known_opts(cmd);
+    let mut i = 0;
+    while i < opts.len() {
+        match known.iter().find(|(name, _)| *name == opts[i]) {
+            None => {
+                let names: Vec<&str> = known.iter().map(|(name, _)| *name).collect();
+                return Err(usage_error(&format!("unknown option {} for {}; known: {}", opts[i], cmd, names.join(" "))));
+            }
+            Some((name, true)) if i + 1 == opts.len() => return Err(usage_error(&format!("{} needs a value", name))),
+            Some((_, takes_value)) => i += if *takes_value { 2 } else { 1 },
+        }
+    }
+    Ok(())
+}
+
 fn opt_value<'a>(opts: &'a [String], key: &str) -> Option<&'a str> {
     opts.iter().position(|o| o == key).and_then(|i| opts.get(i + 1)).map(|s| s.as_str())
 }
@@ -371,9 +409,19 @@ fn real_main(args: Vec<String>) -> i32 {
             eprintln!("{}", USAGE);
             return ErrorKind::Usage.exit_code();
         };
+        if let Err(c) = check_opts("spec-diff", &args[4..]) {
+            return c;
+        }
         return spec_diff(&args[2], new_path, &args[4..]);
     }
     let (cmd, path, opts) = (args[1].as_str(), args[2].as_str(), &args[3..]);
+    if !matches!(cmd, "run" | "check" | "bench" | "fmt") {
+        eprintln!("{}", USAGE);
+        return ErrorKind::Usage.exit_code();
+    }
+    if let Err(c) = check_opts(cmd, opts) {
+        return c;
+    }
     let src = match read_forms(path) {
         Ok(x) => x,
         Err(c) => return c,
@@ -386,10 +434,6 @@ fn real_main(args: Vec<String>) -> i32 {
             other => return usage_error(&format!("unknown --to {}", other)),
         }
         return 0;
-    }
-    if !matches!(cmd, "run" | "check" | "bench") {
-        eprintln!("{}", USAGE);
-        return ErrorKind::Usage.exit_code();
     }
     let m = match load(&src) {
         Ok(m) => m,

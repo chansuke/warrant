@@ -185,8 +185,9 @@ fn spec_diff_blocks_weakened_contracts_and_lists_body_changes() {
 fn absurdly_deep_input_is_a_parse_error_not_a_crash() {
     let n = 1_000_000;
     let src = format!("(defn main [] -> i64 {}0{})", "(+ 1 ".repeat(n), ")".repeat(n + 1));
-    for cmd in ["check", "run", "fmt"] {
-        let o = warrant(&[cmd, &source("deep.wrt", &src), "--no-cache"]);
+    let path = source("deep.wrt", &src);
+    for args in [vec!["check", &path, "--no-cache"], vec!["run", &path, "--no-cache"], vec!["fmt", &path]] {
+        let (cmd, o) = (args[0], warrant(&args));
         assert_eq!(o.code, 2, "{}: {}", cmd, o.stdout);
         assert!(o.stdout.contains("nesting deeper than 1000 levels"), "{}", o.stdout);
     }
@@ -314,4 +315,25 @@ fn every_error_kind_prints_one_sexp_and_exits_with_its_class() {
     let missing = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli/no-such-file.wrt");
     let o = warrant(&["run", &missing.to_string_lossy()]);
     assert_eq!(o.code, exit_class("io"), "{}", o.stdout);
+}
+
+#[test]
+fn unknown_or_incomplete_options_are_usage_errors() {
+    let ok = source("options.wrt", "(defn main [] -> i64 1)\n");
+    let other = source("options-other.wrt", "(defn main [] -> i64 2)\n");
+    let cases: &[(&[&str], &str)] = &[
+        (&["run", &ok, "--contrcts", "off"], "unknown option --contrcts for run"),
+        (&["check", &ok, "--report"], "unknown option --report for check"),
+        (&["fmt", &ok, "--no-cache"], "unknown option --no-cache for fmt"),
+        (&["bench", &ok, "-n", "1", "extra"], "unknown option extra for bench"),
+        (&["spec-diff", &ok, &other, "--no-smtt"], "unknown option --no-smtt for spec-diff"),
+        (&["run", &ok, "--contracts"], "--contracts needs a value"),
+    ];
+    for (args, want) in cases {
+        let o = warrant(args);
+        assert_eq!(o.code, 2, "{:?}: {}", args, o.stdout);
+        assert!(o.stdout.starts_with("(error :kind usage :msg ") && o.stdout.contains(want), "{:?}: {}", args, o.stdout);
+    }
+    let o = warrant(&["run", &ok, "--contracts", "off", "--no-cache", "--timeout-ms", "50"]);
+    assert_eq!((o.code, o.stdout.trim()), (0, "(result 1)"));
 }
