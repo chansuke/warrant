@@ -2,7 +2,8 @@
 # One command to check a change. Prints one line per step and keeps the
 # full logs and summary.md under target/verify/.
 #
-#   scripts/verify [--base REV]          clippy, tests, and the
+#   scripts/verify [--base REV]          clippy, tests, escape hatches in
+#                                        added lines, and the
 #                                        docs/verification.md items the
 #                                        change triggers
 #   scripts/verify formal                TLC on formal/tla, Lean on formal/lean
@@ -56,10 +57,10 @@ step() {
   "$@" >"$log" 2>&1 || status=$?
   local took=$(($(date +%s) - started))s
   if ((status == 0)); then
-    printf 'pass  %-10s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
+    printf 'pass  %-12s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
     rows+=("| $name | pass | $took | \`${log#"$root"/}\` |")
   else
-    printf 'FAIL  %-10s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
+    printf 'FAIL  %-12s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
     rows+=("| $name | **fail** | $took | \`${log#"$root"/}\` |")
     tail -n 30 "$log" | sed 's/^/      /'
     failed=1
@@ -70,10 +71,12 @@ if [ "$mode" = check ] || [ "$mode" = full ]; then
   step clippy cargo clippy --release --locked --all-targets -- -D warnings
   # A test that needs z3 fails rather than skips when z3 is missing.
   step test env WARRANT_REQUIRE_Z3=1 cargo test --release --locked
+  step hatch-check scripts/test-check-escape-hatches.sh
   if has_base; then
+    step added-lines scripts/check-escape-hatches.sh "$base"
     scripts/verification-checklist.sh "$base" >"$out/checklist.md"
   else
-    notes+=("There is no $base in this clone, so the docs/verification.md items were not matched. Pass \`--base REV\`.")
+    notes+=("There is no $base in this clone, so added lines and the docs/verification.md items were not checked. Pass \`--base REV\`.")
     : >"$out/checklist.md"
   fi
 fi
