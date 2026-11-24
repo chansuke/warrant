@@ -5,6 +5,8 @@ AIエージェント向けの検証付き並列言語 Warrant の処理系（Rus
 
 ## コマンド
 
+`nix develop` で CI と同じ Rust 1.99.0 (`rust-toolchain.toml`) と z3 5.1.0、JDK、elan、perf、inferno が入る。
+
 ```
 cargo build --release
 cargo test --release              # 深い再帰があるので release 推奨

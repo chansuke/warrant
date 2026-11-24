@@ -1,0 +1,6 @@
+# The same Rust that CI installs (RUST_VERSION in .github/workflows/ci.yml).
+# flake.nix reads this file too, so change the version in both places at once.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
