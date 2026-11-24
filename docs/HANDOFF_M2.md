@@ -10,7 +10,7 @@
 
 ### 最初にやること
 
-1. `CLAUDE.md`、`docs/DESIGN.md`、`docs/M2_DESIGN.md` をすべて読む。DESIGN.md の Decision Log（D1〜D25）は確定事項なので、覆す場合は理由を Decision Log に書いてからにする
+1. `AGENTS.md`、`docs/architecture.md`、`docs/DESIGN.md`、`docs/M2_DESIGN.md` をすべて読む。DESIGN.md の Decision Log（D1〜D25）は確定事項なので、覆す場合は理由を Decision Log に書いてからにする
 2. `cargo test --release` と `cargo clippy --release --all-targets -- -D warnings` が通ることを確認する
 3. `target/release/warrant check examples/msort.wrt` で 39 VC がすべて proved になり、`bench --contracts auto` と `--contracts off` の median に差がないことを確かめる（M2 の計測に契約の時間が混ざらないことの確認）
 4. `perf record` が使えるか確かめる。`kernel.perf_event_paranoid` が 2 以上なら、ユーザーに `sudo sysctl kernel.perf_event_paranoid=1` を頼む。断られたら `run --report` のカウンタで代える
@@ -77,12 +77,12 @@ M2_DESIGN.md §0 の計測で分かったこと:
 #### M2-7 M1 のインタプリタの削除
 
 - `Sexp` を評価するコードを消す。差分テストの oracle は、M2-2 以降の結果を固定した期待値に置き換える
-- CLAUDE.md のコード構成の表、DESIGN.md §4〜§7 を更新する
+- docs/architecture.md のモジュールの表と層、DESIGN.md §4〜§7 を更新する
 - 受け入れ条件: `eval.rs` に `Sexp` の評価が残っていない。すべてのテストが通る
 
 ### 制約
 
-- CLAUDE.md の不変条件（Wisp 往復、出力はすべて S式、終了コード、i64 はラップしない、エフェクト検査は推移的）を守る
+- docs/architecture.md の不変条件（Wisp 往復、出力はすべて S式、終了コード、i64 はラップしない、エフェクト検査は推移的）を守る
 - 既存の CLI の振る舞いを壊さない。オプションの追加はよい
 - 迷ったら、推奨案を選んで先に進み、判断を Decision Log（D26 から）に書く。ただし、言語の意味論を変える判断（例: 並列実行でのエラーの選び方を逐次と変える）は、実装する前にユーザーに確認する
 

@@ -40,7 +40,7 @@ fn modules_use_only_lower_layers() {
     assert!(
         found.unknown.is_empty(),
         "These modules are not in LAYERS in tests/architecture.rs: {:?}.\n\
-         Add each to LAYERS at the lowest layer that holds everything it uses, and to the module table in CLAUDE.md.",
+         Add each to LAYERS at the lowest layer that holds everything it uses, and to docs/architecture.md.",
         found.unknown
     );
     let new: Vec<&String> = found.violations.values().flatten().collect();
