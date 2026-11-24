@@ -14,8 +14,9 @@ The script reads the `Paths` and `Added lines` of each item. A path is a shell
 pattern in which `*` also matches `/`. An added-lines pattern is an extended
 regular expression matched against the lines the diff adds.
 
-Before a pull request, run `scripts/verify`. It runs clippy and the tests and
-prints the items here that the change triggers. `scripts/verify formal` runs
+Before a pull request, run `scripts/verify`. It runs clippy and the tests,
+checks the added lines for escape hatches (`scripts/check-escape-hatches.sh`),
+and prints the items here that the change triggers. `scripts/verify formal` runs
 TLC and Lean, `scripts/verify bench` compares msort with the base, and
 `scripts/verify full` runs everything. Logs and a summary are kept in
 `target/verify/`.
