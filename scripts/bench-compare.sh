@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Compare `warrant bench` medians of a base revision and the working tree.
-# Runs alternate between the two builds so machine drift hits both equally.
+# Runs alternate between the two builds, and which goes first alternates by
+# round, so machine drift and a first-run penalty hit both equally.
 #
 #   scripts/bench-compare.sh BASE_REV [FILE] [ROUNDS] [MAX_SLOWDOWN_PCT]
 #
@@ -30,9 +31,14 @@ median_of() {
 }
 
 base=() head=()
-for _ in $(seq "$rounds"); do
-  base+=("$(median_of "$work/base/target/release/warrant")")
-  head+=("$(median_of "$root/target/release/warrant")")
+for i in $(seq "$rounds"); do
+  if (( i % 2 )); then
+    base+=("$(median_of "$work/base/target/release/warrant")")
+    head+=("$(median_of "$root/target/release/warrant")")
+  else
+    head+=("$(median_of "$root/target/release/warrant")")
+    base+=("$(median_of "$work/base/target/release/warrant")")
+  fi
 done
 
 mid() { printf '%s\n' "$@" | sort -g | awk '{a[NR]=$1} END {print (NR%2) ? a[(NR+1)/2] : (a[NR/2]+a[NR/2+1])/2}'; }
@@ -41,5 +47,6 @@ h=$(mid "${head[@]}")
 pct=$(awk -v b="$b" -v h="$h" 'BEGIN {printf "%.1f", (h - b) * 100 / b}')
 status=$(awk -v p="$pct" -v m="$max_pct" 'BEGIN {print (p > m) ? "regressed" : "ok"}')
 
-echo "(bench-compare :file \"$file\" :base \"$base_rev\" :rounds $rounds :base-median-ms $b :head-median-ms $h :change-pct $pct :max-pct $max_pct :status $status)"
+echo "(bench-compare :file \"$file\" :base \"$base_rev\" :rounds $rounds :base-median-ms $b :head-median-ms $h :change-pct $pct :max-pct $max_pct :status $status"
+echo "  :base-ms (${base[*]}) :head-ms (${head[*]}))"
 [ "$status" = ok ]

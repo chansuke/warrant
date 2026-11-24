@@ -13,7 +13,7 @@ use crate::ir::{Clause, Fn, Lambda, Node, Program};
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str};
 use crate::vector::{Copied, Vector};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 const MAX_DEPTH: usize = 200_000;
@@ -22,15 +22,15 @@ const MAX_DEPTH: usize = 200_000;
 pub enum Value {
     Int(i64),
     Bool(bool),
-    Str(Rc<str>),
+    Str(Arc<str>),
     Vec(Vector),
-    Closure(Rc<Closure>),
+    Closure(Arc<Closure>),
     Func(usize),
     Builtin(Builtin),
 }
 
 pub struct Closure {
-    code: Rc<Lambda>,
+    code: Arc<Lambda>,
     captured: Vec<Value>,
 }
 
@@ -44,6 +44,8 @@ impl Drop for Closure {
 /// vectors or closures, so freeing a deeply nested value (a vector of a
 /// vector of ..., or the buffers a ConsTail loop releases at once) never
 /// overflows the stack. Values another reference still holds are left alone.
+/// `Arc::into_inner` hands the contents to exactly one of the owners that
+/// let go, so this holds when owners on several threads drop at once.
 pub(crate) fn free_nested(values: &mut Vec<Value>) {
     if !values.iter().any(|v| matches!(v, Value::Vec(_) | Value::Closure(_))) {
         return;
@@ -51,19 +53,19 @@ pub(crate) fn free_nested(values: &mut Vec<Value>) {
     let mut work = std::mem::take(values);
     while let Some(v) = work.pop() {
         match v {
-            Value::Vec(mut xs) => {
-                if let Some(buf) = xs.unique_buf() {
-                    work.append(buf);
+            Value::Vec(xs) => {
+                if let Some(mut elems) = xs.take_buf() {
+                    work.append(&mut elems);
                 }
             }
-            Value::Closure(mut c) => {
-                if let Some(c) = Rc::get_mut(&mut c) {
+            Value::Closure(c) => {
+                if let Some(mut c) = Arc::into_inner(c) {
                     work.append(&mut c.captured);
                 }
             }
             _ => {}
         }
-        // `v` is dropped here with nothing left inside it.
+        // Whatever is dropped here has nothing left inside it.
     }
 }
 
@@ -209,7 +211,7 @@ impl<'p> Interp<'p> {
             Node::Or(es) => self.junction(es, frame, true),
             Node::Lambda(code) => {
                 let captured = code.captures.iter().map(|(outer, _)| frame[*outer].clone()).collect();
-                Ok(Value::Closure(Rc::new(Closure { code: code.clone(), captured })))
+                Ok(Value::Closure(Arc::new(Closure { code: code.clone(), captured })))
             }
             Node::CallGlobal(i, args) => {
                 let args = self.eval_all(args, frame)?;
@@ -668,3 +670,10 @@ impl<'p> Interp<'p> {
     }
 }
 
+
+// Values and the compiled program cross threads in the fork-join (M2-5).
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Value>();
+    send_sync::<Program>();
+};

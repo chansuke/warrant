@@ -7,7 +7,7 @@ use crate::builtin::Builtin;
 use crate::contracts::Checks;
 use crate::sexp::Sexp;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// An index into the frame of the function or lambda being evaluated.
 pub type Slot = usize;
@@ -15,7 +15,7 @@ pub type Slot = usize;
 pub enum Node {
     Int(i64),
     Bool(bool),
-    Str(Rc<str>),
+    Str(Arc<str>),
     Local(Slot),
     /// The last read of a slot on its path: takes the value out, so a vector
     /// read here can be updated in place (M2-2).
@@ -29,7 +29,7 @@ pub enum Node {
     Do(Vec<Node>),
     And(Vec<Node>),
     Or(Vec<Node>),
-    Lambda(Rc<Lambda>),
+    Lambda(Arc<Lambda>),
     CallGlobal(FnIdx, Vec<Node>),
     CallBuiltin(Builtin, Vec<Node>),
     CallValue(Box<Node>, Vec<Node>),
@@ -202,7 +202,7 @@ impl Compiler {
                 for n in body.iter_mut().rev() {
                     last_uses(n, &mut live);
                 }
-                Node::Lambda(Rc::new(Lambda { params, captures: f.captures, frame: f.size, body }))
+                Node::Lambda(Arc::new(Lambda { params, captures: f.captures, frame: f.size, body }))
             }
             ExprKind::Do(es) => Node::Do(self.exprs(es)),
             ExprKind::And(es) => Node::And(self.exprs(es)),
