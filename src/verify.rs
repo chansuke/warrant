@@ -88,9 +88,9 @@ pub fn discharge(obs: Vec<Obligation>, solver: &dyn Solver, cache: Option<&Cache
     std::thread::scope(|s| {
         for _ in 0..jobs.clamp(1, n.max(1)) {
             s.spawn(|| loop {
-                let Some((i, ob)) = queue.lock().unwrap().next() else { return };
+                let Some((i, ob)) = queue.lock().expect("no worker panics while holding the queue").next() else { return };
                 let r = discharge_one(ob, solver, cache);
-                results.lock().unwrap()[i] = Some(r);
+                results.lock().expect("no worker panics while holding the results")[i] = Some(r);
             });
         }
     });

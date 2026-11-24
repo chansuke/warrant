@@ -36,6 +36,7 @@ pub struct Z3 {
 impl Z3 {
     /// `None` when no `z3` binary is on the PATH.
     pub fn find(timeout_ms: u64) -> Option<Z3> {
+        #[expect(clippy::disallowed_methods, reason = "solver::Z3 is the one place that starts processes")]
         let out = Command::new("z3").arg("--version").output().ok()?;
         let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
         out.status.success().then_some(Z3 { version, timeout_ms })
@@ -44,6 +45,7 @@ impl Z3 {
     /// For tests that need z3: `None` means skip. With `WARRANT_REQUIRE_Z3=1`
     /// (set by `scripts/verify` and CI) a missing z3 fails the test instead,
     /// so "all tests passed" cannot hide a skipped proof.
+    #[expect(clippy::disallowed_methods, reason = "a switch for tests, not configuration of warrant")]
     pub fn find_for_test(timeout_ms: u64) -> Option<Z3> {
         skip_or_fail(Z3::find(timeout_ms), std::env::var_os(REQUIRE_Z3).is_some_and(|v| v == "1"))
     }
@@ -58,7 +60,10 @@ fn skip_or_fail(found: Option<Z3>, required: bool) -> Option<Z3> {
             "z3 5.1.0 not found on PATH but {}=1: run inside `nix develop`, install it (.github/install-z3.sh), or unset {}",
             REQUIRE_Z3, REQUIRE_Z3
         );
-        eprintln!("z3 not found; skipping");
+        #[expect(clippy::print_stderr, reason = "tells the test log why a test returned early")]
+        {
+            eprintln!("z3 not found; skipping");
+        }
     }
     found
 }
@@ -126,6 +131,7 @@ fn atom_value(v: &str) -> String {
 
 impl Z3 {
     fn run(&self, script: &str, inputs: &[(String, Ty)]) -> std::io::Result<Outcome> {
+        #[expect(clippy::disallowed_methods, reason = "solver::Z3 is the one place that starts processes")]
         let mut child = Command::new("z3")
             .args(["-in", &format!("-t:{}", self.timeout_ms)])
             .stdin(Stdio::piped())

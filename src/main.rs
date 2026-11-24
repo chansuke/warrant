@@ -163,6 +163,7 @@ fn section(name: &str, ns: u128, errors: &[Diag]) -> String {
 /// A cached `proved` erases a run-time check, so the cache must not come with
 /// the source: a cloned repository could ship forged entries (D23). The
 /// default lives in the user's own cache directory instead.
+#[expect(clippy::disallowed_methods, reason = "the one place warrant reads its environment")]
 fn default_cache_dir() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .filter(|d| std::path::Path::new(d).is_absolute())

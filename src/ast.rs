@@ -336,8 +336,9 @@ impl Lowerer<'_> {
                         if items.len() != 4 {
                             return Err(syntax(at, "(if cond then else)"));
                         }
-                        let mut v = self.exprs(&items[1..], &kids[1..])?.into_iter();
-                        let (c, t, f) = (v.next().unwrap(), v.next().unwrap(), v.next().unwrap());
+                        let Ok([c, t, f]) = <[Expr; 3]>::try_from(self.exprs(&items[1..], &kids[1..])?) else {
+                            unreachable!("(if) has three operands, checked above")
+                        };
                         ExprKind::If(Box::new(c), Box::new(t), Box::new(f))
                     }
                     Some("let") => {

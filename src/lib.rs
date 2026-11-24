@@ -2,6 +2,10 @@
 //! a reference interpreter with runtime-checked contracts and effects,
 //! and a machine-readable profiler.
 
+// stdout belongs to the CLI in main.rs, whose every line is an S-expression,
+// and a library error is a value, not a panic without a reason.
+#![deny(clippy::print_stdout, clippy::print_stderr, clippy::unwrap_used)]
+
 pub mod ast;
 pub mod builtin;
 pub mod cache;

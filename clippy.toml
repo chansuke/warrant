@@ -1,0 +1,10 @@
+# `#[cfg(test)] mod tests` may unwrap and print; src/lib.rs denies both elsewhere.
+allow-unwrap-in-tests = true
+allow-print-in-tests = true
+disallowed-methods = [
+  { path = "std::env::var", reason = "read configuration only in main::default_cache_dir and pass it down" },
+  { path = "std::env::var_os", reason = "read configuration only in main::default_cache_dir and pass it down" },
+  { path = "std::process::Command::new", reason = "only solver::Z3 starts processes; add a Solver impl instead" },
+  { path = "std::thread::sleep", reason = "wait on the event, not a timer; benches measure, they do not wait" },
+  { path = "std::thread::spawn", reason = "use std::thread::scope, as verify::discharge does" },
+]
