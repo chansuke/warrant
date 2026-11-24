@@ -1,6 +1,6 @@
 # アーキテクチャ
 
-Warrant の処理系は依存クレートのない 1 つのクレートで、`src/` のモジュールは下の層から順に積み上がる。設計判断は `docs/DESIGN.md` の Decision Log にある。
+Warrant の処理系は 1 つのクレートで、依存は fork-join のスケジューラ `rayon` だけ（D26、D30）。`src/` のモジュールは下の層から順に積み上がる。設計判断は `docs/DESIGN.md` の Decision Log にある。
 
 ## 層
 
