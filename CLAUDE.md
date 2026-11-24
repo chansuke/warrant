@@ -5,6 +5,8 @@ AIエージェント向けの検証付き並列言語 Warrant の処理系（Rus
 
 ## コマンド
 
+変更を終える前に `scripts/verify` を走らせ、`target/verify/summary.md` と、そこに出た `docs/verification.md` の項目を確かめる。`scripts/verify formal` は TLC と Lean、`scripts/verify bench` は main との性能比較、`full` はすべて。
+
 `nix develop` で CI と同じ Rust 1.99.0 (`rust-toolchain.toml`) と z3 5.1.0、JDK、elan、perf、inferno が入る。
 
 ```
