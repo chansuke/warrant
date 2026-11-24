@@ -98,7 +98,13 @@ impl Program {
                 // Clauses run before and after the body in this order, so a
                 // parameter an ensures reads is never moved by the body.
                 let mut live = vec![false; c.frames[0].size];
-                for n in ensures.iter_mut().rev().map(|c| &mut c.node).chain(body.iter_mut().rev()).chain(requires.iter_mut().rev().map(|c| &mut c.node)) {
+                for n in ensures
+                    .iter_mut()
+                    .rev()
+                    .map(|c| &mut c.node)
+                    .chain(body.iter_mut().rev())
+                    .chain(requires.iter_mut().rev().map(|c| &mut c.node))
+                {
                     last_uses(n, &mut live);
                 }
                 // An ensures needs the result of each recursive call, so a
@@ -249,7 +255,9 @@ fn last_uses(n: &mut Node, live: &mut [bool]) {
                 last_uses(v, live);
             }
         }
-        Node::VecLit(es) | Node::Do(es) | Node::And(es) | Node::Or(es) | Node::CallGlobal(_, es) | Node::CallBuiltin(_, es) => seq(es, live),
+        Node::VecLit(es) | Node::Do(es) | Node::And(es) | Node::Or(es) | Node::CallGlobal(_, es) | Node::CallBuiltin(_, es) => {
+            seq(es, live)
+        }
         Node::CallValue(f, args) | Node::ConsTail(f, args) => {
             seq(args, live);
             last_uses(f, live);
@@ -277,7 +285,8 @@ fn cons_tails(n: &mut Node, me: FnIdx, params: usize) {
                 cons_tails(last, me, params);
             }
         }
-        Node::CallBuiltin(Builtin::Cons, args) if matches!(args.as_slice(), [_, Node::CallGlobal(f, a)] if *f == me && a.len() == params) => {
+        Node::CallBuiltin(Builtin::Cons, args) if matches!(args.as_slice(), [_, Node::CallGlobal(f, a)] if *f == me && a.len() == params) =>
+        {
             let Some(Node::CallGlobal(_, call)) = args.pop() else { unreachable!("matched above") };
             let head = args.pop().expect("matched above");
             *n = Node::ConsTail(Box::new(head), call);

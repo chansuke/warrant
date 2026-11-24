@@ -338,20 +338,32 @@ fn generated_programs_agree() {
 fn cons_tail_recursion_agrees() {
     on_big_stack(|| {
         let up = |spec: &str, base: &str, head: &str| {
-            format!("(defn up [n : i64] -> (Vec i64) {} (if (= n 0) {} (cons {} (up (- n 1))))) (defn main [] -> (Vec i64) (up 5))", spec, base, head)
+            format!(
+                "(defn up [n : i64] -> (Vec i64) {} (if (= n 0) {} (cons {} (up (- n 1))))) (defn main [] -> (Vec i64) (up 5))",
+                spec, base, head
+            )
         };
         // Six calls of `up` were open, then `main`.
         let up5 = ["up", "up", "up", "up", "up", "up", "main"];
         assert_eq!(same(&up("", "[]", "n")).unwrap(), "[5 4 3 2 1]");
         assert_eq!(same(&up("", "[0]", "(* n 10)")).unwrap(), "[50 40 30 20 10 0]");
         assert_eq!(same(&up("(:ensures (= (len result) n))", "[]", "n")).unwrap(), "[5 4 3 2 1]");
-        assert_eq!(same(&up("(:ensures (> (len result) n))", "[]", "n")), error("contract", "ensures failed in up: (> (len result) n)", &up5));
+        assert_eq!(
+            same(&up("(:ensures (> (len result) n))", "[]", "n")),
+            error("contract", "ensures failed in up: (> (len result) n)", &up5)
+        );
         assert_eq!(same(&up("", "(/ 1 0)", "n")), error("div-zero", "(/ 1 0)", &up5));
-        assert_eq!(same(&up("(:requires (not (= n 2)))", "[]", "n")), error("contract", "requires failed in up: (not (= n 2))", &["up", "up", "up", "up", "main"]));
+        assert_eq!(
+            same(&up("(:requires (not (= n 2)))", "[]", "n")),
+            error("contract", "requires failed in up: (not (= n 2))", &["up", "up", "up", "up", "main"])
+        );
         assert_eq!(same(&up("", "[]", "(/ 10 (- n 2))")), error("div-zero", "(/ 10 0)", &["up", "up", "up", "up", "main"]));
         // The innermost cons runs in the caller of the call that returned 7.
         assert_eq!(same(&up("", "7", "n")), error("type", "(cons ...) expects vec, got i64", &["up", "up", "up", "up", "up", "main"]));
-        assert_eq!(same(&up("(:effects [])", "[]", "(do (print n) n)")), error("effect", "`print` performs effect io, but `up` declares (:effects [])", &["up", "main"]));
+        assert_eq!(
+            same(&up("(:effects [])", "[]", "(do (print n) n)")),
+            error("effect", "`print` performs effect io, but `up` declares (:effects [])", &["up", "main"])
+        );
         for src in [
             "(defn up [n : i64] -> (Vec i64) (let [m (- n 1)] (do (+ n 1) (if (< m 0) [] (cons n (up m)))))) (defn main [] -> (Vec i64) (up 4))",
             "(defn zip [a : (Vec i64) b : (Vec i64)] -> (Vec i64) (if (empty? a) b (if (empty? b) a (if (< (get a 0) (get b 0)) (cons (get a 0) (zip (rest a) b)) (cons (get b 0) (zip a (rest b))))))) (defn main [] -> (Vec i64) (zip [1 4 6] [2 3 5 7]))",

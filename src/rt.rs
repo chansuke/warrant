@@ -438,9 +438,7 @@ impl<'p> Interp<'p> {
                 if y == 0 {
                     return Err(RtError::new(ErrorKind::DivZero, format!("({} {} 0)", name, x)));
                 }
-                if b == B::Div { x.checked_div(y) } else { x.checked_rem_euclid(y) }
-                    .map(Value::Int)
-                    .ok_or_else(ovf)
+                if b == B::Div { x.checked_div(y) } else { x.checked_rem_euclid(y) }.map(Value::Int).ok_or_else(ovf)
             }
             B::Eq => {
                 arity(name, &args, 2)?;
@@ -550,7 +548,12 @@ impl<'p> Interp<'p> {
                         match r {
                             Value::Bool(true) => out.push(x.clone()),
                             Value::Bool(false) => {}
-                            o => return Err(RtError::new(ErrorKind::Type, format!("filter predicate must return bool, got {}", type_name(&o)))),
+                            o => {
+                                return Err(RtError::new(
+                                    ErrorKind::Type,
+                                    format!("filter predicate must return bool, got {}", type_name(&o)),
+                                ))
+                            }
                         }
                     }
                 }
@@ -620,7 +623,6 @@ impl<'p> Interp<'p> {
         }
     }
 }
-
 
 // Values and the compiled program cross threads in the fork-join (M2-5).
 const _: () = {

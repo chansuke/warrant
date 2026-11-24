@@ -110,11 +110,7 @@ impl RtError {
         RtError { kind, msg: msg.into(), trace: Vec::new() }
     }
     pub fn to_sexp(&self) -> String {
-        let tr = if self.trace.is_empty() {
-            String::new()
-        } else {
-            format!(" :trace ({})", self.trace.join(" "))
-        };
+        let tr = if self.trace.is_empty() { String::new() } else { format!(" :trace ({})", self.trace.join(" ")) };
         format!("(error :kind {} :msg {}{})", self.kind, quote_str(&self.msg), tr)
     }
 }

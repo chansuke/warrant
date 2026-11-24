@@ -66,12 +66,7 @@ impl ParseError {
     }
     /// Errors are S-expressions too, so agents can parse them.
     pub fn to_sexp(&self) -> String {
-        format!(
-            "(error :kind parse :at (line {} col {}) :msg {})",
-            self.line,
-            self.col,
-            quote_str(&self.msg)
-        )
+        format!("(error :kind parse :at (line {} col {}) :msg {})", self.line, self.col, quote_str(&self.msg))
     }
 }
 
@@ -159,9 +154,7 @@ impl<'a> Lexer<'a> {
                             Some('t') => s.push('\t'),
                             Some('"') => s.push('"'),
                             Some('\\') => s.push('\\'),
-                            _ => {
-                                return Err(ParseError::new(self.line, self.col, "bad escape in string"))
-                            }
+                            _ => return Err(ParseError::new(self.line, self.col, "bad escape in string")),
                         },
                         Some(x) => s.push(x),
                     }
@@ -194,9 +187,10 @@ pub fn atom(s: &str, line: usize, col: usize) -> Result<Sexp, ParseError> {
     let digit_start = |t: &str| t.starts_with(|c: char| c.is_ascii_digit());
     let numeric = digit_start(s) || (s.len() > 1 && s.starts_with('-') && digit_start(&s[1..]));
     if numeric {
-        return s.parse::<i64>().map(Sexp::Int).map_err(|_| {
-            ParseError::new(line, col, format!("invalid integer literal `{}` (must fit i64)", s))
-        });
+        return s
+            .parse::<i64>()
+            .map(Sexp::Int)
+            .map_err(|_| ParseError::new(line, col, format!("invalid integer literal `{}` (must fit i64)", s)));
     }
     if s.len() > 1 && s.starts_with(':') {
         return Ok(Sexp::Kw(s[1..].to_string()));
@@ -244,9 +238,7 @@ impl<'a> Parser<'a> {
         let e = match tok {
             Tok::LParen => Sexp::List(self.parse_seq(Tok::RParen, &mut span)?),
             Tok::LBrack => Sexp::Vector(self.parse_seq(Tok::RBrack, &mut span)?),
-            Tok::RParen | Tok::RBrack => {
-                return Err(ParseError::new(l, c, "unexpected closing bracket"))
-            }
+            Tok::RParen | Tok::RBrack => return Err(ParseError::new(l, c, "unexpected closing bracket")),
             Tok::Str(s) => Sexp::Str(s),
             Tok::Atom(a) => atom(&a, l, c)?,
         };
@@ -260,9 +252,7 @@ impl<'a> Parser<'a> {
         let mut v = Vec::new();
         loop {
             match self.peek()? {
-                None => {
-                    return Err(ParseError::new(span.at.line, span.at.col, "bracket opened here is never closed"))
-                }
+                None => return Err(ParseError::new(span.at.line, span.at.col, "bracket opened here is never closed")),
                 Some((t, tl, tc)) if t == Tok::RParen || t == Tok::RBrack => {
                     self.next()?;
                     if t == close {

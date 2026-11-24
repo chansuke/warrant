@@ -319,7 +319,10 @@ impl<'a> Exec<'a> {
             Some(VecOp::Cons(h, v)) => (t, format!("(+ (cnt-VI {} {x}) (ite (= {x} {}) 1 0))", self.counts_of(&v), h, x = x)),
             Some(VecOp::Rest(v)) => {
                 let c = self.counts_of(&v);
-                (format!("(> (len-VI {}) 0)", c), format!("(- (cnt-VI {c} {x}) (ite (= {x} (select (arr-VI {v}) 0)) 1 0))", c = c, v = v, x = x))
+                (
+                    format!("(> (len-VI {}) 0)", c),
+                    format!("(- (cnt-VI {c} {x}) (ite (= {x} (select (arr-VI {v}) 0)) 1 0))", c = c, v = v, x = x),
+                )
             }
             Some(VecOp::Slice(v, lo, hi)) => {
                 let c = self.counts_of(&v);
@@ -330,9 +333,17 @@ impl<'a> Exec<'a> {
                 let ones: Vec<String> = items.iter().map(|i| format!("(ite (= {} {}) 1 0)", x, i)).collect();
                 (t, format!("(+ 0 {})", ones.join(" ")))
             }
-            Some(VecOp::Ite(c, a, b)) => (t, format!("(ite {} (cnt-VI {} {x}) (cnt-VI {} {x}))", c, self.counts_of(&a), self.counts_of(&b), x = x)),
+            Some(VecOp::Ite(c, a, b)) => {
+                (t, format!("(ite {} (cnt-VI {} {x}) (cnt-VI {} {x}))", c, self.counts_of(&a), self.counts_of(&b), x = x))
+            }
         };
-        self.defs.push(format!("(forall (({x} Int)) (! (=> {g} (= (cnt-VI {n} {x}) {b})) :pattern ((cnt-VI {n} {x}))))", x = x, g = guard, n = n, b = body));
+        self.defs.push(format!(
+            "(forall (({x} Int)) (! (=> {g} (= (cnt-VI {n} {x}) {b})) :pattern ((cnt-VI {n} {x}))))",
+            x = x,
+            g = guard,
+            n = n,
+            b = body
+        ));
         n
     }
 
@@ -634,9 +645,20 @@ impl<'a> Exec<'a> {
             B::Slice => {
                 let s = sfx();
                 let (v, lo, hi) = (t(0), t(1), t(2));
-                self.require(VcKind::Bounds, at, format!("(and (<= 0 {lo}) (<= {lo} {hi}) (<= {hi} (len-{s} {v})))", lo = lo, hi = hi, s = s, v = v));
+                self.require(
+                    VcKind::Bounds,
+                    at,
+                    format!("(and (<= 0 {lo}) (<= {lo} {hi}) (<= {hi} (len-{s} {v})))", lo = lo, hi = hi, s = s, v = v),
+                );
                 let k = self.binder();
-                format!("(mk-{s} (lambda (({k} Int)) (select (arr-{s} {v}) (+ {k} {lo}))) (- {hi} {lo}))", s = s, k = k, v = v, lo = lo, hi = hi)
+                format!(
+                    "(mk-{s} (lambda (({k} Int)) (select (arr-{s} {v}) (+ {k} {lo}))) (- {hi} {lo}))",
+                    s = s,
+                    k = k,
+                    v = v,
+                    lo = lo,
+                    hi = hi
+                )
             }
             B::Rest => {
                 let s = sfx();
@@ -716,7 +738,9 @@ impl<'a> Exec<'a> {
             (B::Map, V::T(body), Some(rs)) if inlinable => {
                 V::T(format!("(mk-{rs} (lambda (({k} Int)) {body}) (len-{s} {v}))", rs = rs, k = k, body = body, s = s, v = v))
             }
-            (B::All, V::T(body), _) if inlinable => V::T(format!("(forall (({k} Int)) (=> {bounds} {body}))", k = k, bounds = in_bounds, body = body)),
+            (B::All, V::T(body), _) if inlinable => {
+                V::T(format!("(forall (({k} Int)) (=> {bounds} {body}))", k = k, bounds = in_bounds, body = body))
+            }
             _ => {
                 let r = self.fresh_val(ret, b.name());
                 if let (V::T(r), Some(rs)) = (&r, vs(ret)) {
@@ -779,7 +803,8 @@ mod tests {
 
     #[test]
     fn arithmetic_obligations_are_generated_per_operation() {
-        let kinds: Vec<String> = obligations("(defn f [a : i64 b : i64] -> i64 (+ (* a b) (/ a b)))").iter().map(|o| o.kind.to_sexp()).collect();
+        let kinds: Vec<String> =
+            obligations("(defn f [a : i64 b : i64] -> i64 (+ (* a b) (/ a b)))").iter().map(|o| o.kind.to_sexp()).collect();
         assert_eq!(kinds, ["overflow", "div-zero", "overflow", "overflow"]);
     }
 
@@ -852,7 +877,9 @@ mod tests {
     #[test]
     fn wrong_perm_is_never_proved() {
         // Against a literal Z3 finds no model for the counts and says unknown.
-        for (body, want) in [("(cons 0 xs)", "failed (xs ["), ("(rest xs)", "failed (xs ["), ("(concat xs xs)", "failed (xs ["), ("[1 2]", "unknown")] {
+        for (body, want) in
+            [("(cons 0 xs)", "failed (xs ["), ("(rest xs)", "failed (xs ["), ("(concat xs xs)", "failed (xs ["), ("[1 2]", "unknown")]
+        {
             let src = format!("(defn f [xs : (Vec i64)] -> (Vec i64) (:requires (> (len xs) 0)) (:ensures (perm? result xs)) {})", body);
             let Some(v) = verdicts(&src) else { return };
             let ens: Vec<&String> = v.iter().filter(|x| x.1 == "ensures :clause 0").map(|x| &x.2).collect();

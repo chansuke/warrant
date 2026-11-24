@@ -131,7 +131,13 @@ impl Walker<'_> {
                 errors.push(Diag::new(
                     ErrorKind::Effect,
                     at,
-                    format!("{} that performs {} via ({}), but its type allows only {}", what, eff, src.via.join(" "), crate::ast::effects_sexp(allowed)),
+                    format!(
+                        "{} that performs {} via ({}), but its type allows only {}",
+                        what,
+                        eff,
+                        src.via.join(" "),
+                        crate::ast::effects_sexp(allowed)
+                    ),
                 ));
             }
         }
@@ -194,9 +200,7 @@ impl Walker<'_> {
                 },
                 _ => unknown(e.at, "fn"),
             },
-            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::VecLit(_) | ExprKind::And(_) | ExprKind::Or(_) => {
-                Fx::new()
-            }
+            ExprKind::Int(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::VecLit(_) | ExprKind::And(_) | ExprKind::Or(_) => Fx::new(),
         }
     }
 

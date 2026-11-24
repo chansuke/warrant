@@ -139,15 +139,23 @@ pub fn diff(old: &Module, new: &Module, solver: Option<&dyn Solver>) -> Diff {
                     spec.push(change(name, "effects", "narrowed", Verdict::Strengthened, detail));
                 }
             }
-            (Some(a), None) => spec.push(change(name, "effects", "removed", Verdict::Weakened, format!(" :old {}", crate::ast::effects_sexp(a)))),
-            (None, Some(b)) => spec.push(change(name, "effects", "added", Verdict::Strengthened, format!(" :new {}", crate::ast::effects_sexp(b)))),
+            (Some(a), None) => {
+                spec.push(change(name, "effects", "removed", Verdict::Weakened, format!(" :old {}", crate::ast::effects_sexp(a))))
+            }
+            (None, Some(b)) => {
+                spec.push(change(name, "effects", "added", Verdict::Strengthened, format!(" :new {}", crate::ast::effects_sexp(b))))
+            }
             (None, None) => {}
         }
 
         let wall = |d: &FnDecl| d.spec.budget.as_ref().and_then(|b| b.wall_ms);
         match (wall(o), wall(n)) {
-            (Some(a), Some(b)) if b > a => spec.push(change(name, "budget", "loosened", Verdict::Weakened, format!(" :old (wall-ms {}) :new (wall-ms {})", a, b))),
-            (Some(a), Some(b)) if b < a => spec.push(change(name, "budget", "tightened", Verdict::Strengthened, format!(" :old (wall-ms {}) :new (wall-ms {})", a, b))),
+            (Some(a), Some(b)) if b > a => {
+                spec.push(change(name, "budget", "loosened", Verdict::Weakened, format!(" :old (wall-ms {}) :new (wall-ms {})", a, b)))
+            }
+            (Some(a), Some(b)) if b < a => {
+                spec.push(change(name, "budget", "tightened", Verdict::Strengthened, format!(" :old (wall-ms {}) :new (wall-ms {})", a, b)))
+            }
             (Some(a), None) => spec.push(change(name, "budget", "removed", Verdict::Weakened, format!(" :old (wall-ms {})", a))),
             (None, Some(b)) => spec.push(change(name, "budget", "added", Verdict::Strengthened, format!(" :new (wall-ms {})", b))),
             _ => {}
@@ -229,7 +237,10 @@ mod tests {
     #[test]
     fn removing_or_changing_ensures_is_suspected_weakening() {
         assert_eq!(changes(BASE, &BASE.replace("(:ensures (> result 0)) ", "")), ["f ensures removed weakened"]);
-        assert_eq!(changes(BASE, &BASE.replace("(> result 0)", "(>= result 0)")), ["f ensures removed weakened", "f ensures added strengthened"]);
+        assert_eq!(
+            changes(BASE, &BASE.replace("(> result 0)", "(>= result 0)")),
+            ["f ensures removed weakened", "f ensures added strengthened"]
+        );
     }
 
     #[test]

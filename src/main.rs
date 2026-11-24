@@ -11,8 +11,8 @@ use warrant::cache::Cache;
 use warrant::contracts::{Checks, ClauseLevels, Level, Mode};
 use warrant::diag::{Diag, ErrorKind};
 use warrant::ir::Program;
-use warrant::rt::Interp;
 use warrant::profile::{self, ms, RunInfo};
+use warrant::rt::Interp;
 use warrant::sexp::{self, quote_str, Sexp, SpanTree};
 use warrant::solver::Z3;
 use warrant::types::TypeInfo;
@@ -23,10 +23,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     report_panics_as_internal_errors();
     // Tree-walking recursion is deep; give it room.
-    let child = std::thread::Builder::new()
-        .stack_size(1 << 30)
-        .spawn(move || real_main(args))
-        .expect("spawn main thread");
+    let child = std::thread::Builder::new().stack_size(1 << 30).spawn(move || real_main(args)).expect("spawn main thread");
     std::process::exit(child.join().unwrap_or(ErrorKind::Internal.exit_code()));
 }
 
@@ -36,7 +33,8 @@ fn report_panics_as_internal_errors() {
     let rust_report = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let payload = info.payload();
-        let msg = payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str)).unwrap_or("panic");
+        let msg =
+            payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str)).unwrap_or("panic");
         let at = info.location().map_or(String::new(), |l| format!(" :at {}", quote_str(&format!("{}:{}", l.file(), l.line()))));
         println!("(error :kind {} :msg {}{})", ErrorKind::Internal, quote_str(msg), at);
         rust_report(info);
@@ -318,7 +316,11 @@ fn check(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
     }
     s += ")";
     println!("{}", s);
-    if roundtrip_ok && type_errors.is_empty() && effect_errors.is_empty() && !vcs_failed { 0 } else { 1 }
+    if roundtrip_ok && type_errors.is_empty() && effect_errors.is_empty() && !vcs_failed {
+        0
+    } else {
+        1
+    }
 }
 
 fn run(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
@@ -412,7 +414,11 @@ fn spec_diff(old_path: &str, new_path: &str, opts: &[String]) -> i32 {
     let z3 = if opts.iter().any(|o| o == "--no-smt") { None } else { Z3::find(timeout_ms) };
     let d = specdiff::diff(&modules[0], &modules[1], z3.as_ref().map(|z| z as &dyn warrant::solver::Solver));
     println!("{}", d.to_sexp(old_path, new_path));
-    if d.weakened() { 1 } else { 0 }
+    if d.weakened() {
+        1
+    } else {
+        0
+    }
 }
 
 fn real_main(args: Vec<String>) -> i32 {

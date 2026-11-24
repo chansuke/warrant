@@ -88,9 +88,7 @@ impl Cache {
         let path = self.path(fingerprint, script);
         // Write then rename, so a concurrent `check` never reads half a file.
         let tmp = path.with_extension(format!("tmp{}-{:?}", std::process::id(), std::thread::current().id()));
-        let _ = std::fs::create_dir_all(&self.dir)
-            .and_then(|()| std::fs::write(&tmp, text))
-            .and_then(|()| std::fs::rename(&tmp, &path));
+        let _ = std::fs::create_dir_all(&self.dir).and_then(|()| std::fs::write(&tmp, text)).and_then(|()| std::fs::rename(&tmp, &path));
     }
 }
 

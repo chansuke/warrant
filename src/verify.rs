@@ -106,11 +106,8 @@ pub fn summary_sexp(results: &[VcResult], total_ns: u128) -> String {
     let failed = count(|s| matches!(s, Status::Failed { .. }));
     let mut slow: Vec<&VcResult> = results.iter().filter(|r| !r.cached && matches!(r.ob.goal, Goal::Script(_))).collect();
     slow.sort_by_key(|a| std::cmp::Reverse(a.ns));
-    let slowest: Vec<String> = slow
-        .iter()
-        .take(SLOWEST)
-        .map(|r| format!("({} {} {})", r.ob.fn_name, r.ob.kind.name(), crate::profile::ms(r.ns)))
-        .collect();
+    let slowest: Vec<String> =
+        slow.iter().take(SLOWEST).map(|r| format!("({} {} {})", r.ob.fn_name, r.ob.kind.name(), crate::profile::ms(r.ns))).collect();
     let mut reproved: Vec<&str> = slow.iter().map(|r| r.ob.fn_name.as_str()).collect();
     reproved.sort_unstable();
     reproved.dedup();
