@@ -12,7 +12,7 @@ use crate::ir::{Clause, Fn, Lambda, Node, Program};
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str};
 use crate::vector::{Copied, Vector};
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 const MAX_DEPTH: usize = 200_000;
@@ -21,15 +21,15 @@ const MAX_DEPTH: usize = 200_000;
 pub enum Value {
     Int(i64),
     Bool(bool),
-    Str(Rc<str>),
+    Str(Arc<str>),
     Vec(Vector),
-    Closure(Rc<Closure>),
+    Closure(Arc<Closure>),
     Func(usize),
     Builtin(Builtin),
 }
 
 pub struct Closure {
-    code: Rc<Lambda>,
+    code: Arc<Lambda>,
     captured: Vec<Value>,
 }
 
@@ -56,7 +56,7 @@ pub(crate) fn free_nested(values: &mut Vec<Value>) {
                 }
             }
             Value::Closure(mut c) => {
-                if let Some(c) = Rc::get_mut(&mut c) {
+                if let Some(c) = Arc::get_mut(&mut c) {
                     work.append(&mut c.captured);
                 }
             }
@@ -208,7 +208,7 @@ impl<'p> Interp<'p> {
             Node::Or(es) => self.junction(es, frame, true),
             Node::Lambda(code) => {
                 let captured = code.captures.iter().map(|(outer, _)| frame[*outer].clone()).collect();
-                Ok(Value::Closure(Rc::new(Closure { code: code.clone(), captured })))
+                Ok(Value::Closure(Arc::new(Closure { code: code.clone(), captured })))
             }
             Node::CallGlobal(i, args) => {
                 let args = self.eval_all(args, frame)?;
@@ -667,3 +667,10 @@ impl<'p> Interp<'p> {
     }
 }
 
+
+// Values and the compiled program cross threads in the fork-join (M2-5).
+const _: () = {
+    const fn send_sync<T: Send + Sync>() {}
+    send_sync::<Value>();
+    send_sync::<Program>();
+};
