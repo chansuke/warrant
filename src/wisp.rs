@@ -86,8 +86,7 @@ fn inline_line(items: &[Sexp]) -> String {
     let (last, init) = items.split_last().expect("len >= 2");
     let mut parts: Vec<String> = init.iter().map(flat).collect();
     // Clause lines (`:budget (wall-ms 50)`) read better with brackets than with `:`.
-    let init_simple = !matches!(init.first(), Some(Sexp::Kw(_)))
-        && init.iter().all(|x| !matches!(x, Sexp::List(_)));
+    let init_simple = !matches!(init.first(), Some(Sexp::Kw(_))) && init.iter().all(|x| !matches!(x, Sexp::List(_)));
     match last {
         Sexp::List(v) if init_simple && !needs_brackets(v) && !is_clause(last) => {
             parts.push(":".into());

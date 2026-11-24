@@ -30,7 +30,11 @@ fn check_reports_type_errors_with_positions() {
     let o = warrant(&["check", &source("ill_typed.wrt", ILL_TYPED)]);
     assert_eq!(o.code, 1, "{}", o.stdout);
     assert!(o.stdout.contains("(types :status error"), "{}", o.stdout);
-    assert!(o.stdout.contains("(error :kind type :at (line 2 col 3) :msg \"if branches differ: then is i64, else is Bool\")"), "{}", o.stdout);
+    assert!(
+        o.stdout.contains("(error :kind type :at (line 2 col 3) :msg \"if branches differ: then is i64, else is Bool\")"),
+        "{}",
+        o.stdout
+    );
 }
 
 #[test]
@@ -136,7 +140,13 @@ fn auto_erases_proved_clauses_and_keeps_the_rest() {
     assert!(o.stdout.contains("(contracts auto :checked 0 :erased 14"), "{}", o.stdout);
     // Holds for gen's output but not for every input, so it cannot be proved.
     let base = std::fs::read_to_string("examples/msort.wrt").unwrap();
-    let unproved = source("auto_unproved.wrt", &base.replace("(perm? result xs) (= (len result) (len xs))", "(perm? result xs) (= (len result) (len xs)) (all? (fn [x] (>= x 0)) result)"));
+    let unproved = source(
+        "auto_unproved.wrt",
+        &base.replace(
+            "(perm? result xs) (= (len result) (len xs))",
+            "(perm? result xs) (= (len result) (len xs)) (all? (fn [x] (>= x 0)) result)",
+        ),
+    );
     let o = warrant(&["run", &unproved, "--report"]);
     assert_eq!(o.code, 0, "{}", o.stdout);
     assert!(o.stdout.contains("(contracts auto :checked 1 :erased 14"), "{}", o.stdout);
@@ -305,7 +315,8 @@ fn every_error_kind_prints_one_sexp_and_exits_with_its_class() {
         let mut args = vec!["run", path.as_str()];
         args.extend_from_slice(opts);
         let o = warrant(&args);
-        let forms = warrant::sexp::parse_all(&o.stdout).unwrap_or_else(|e| panic!("stdout is not S-expressions ({}): {}", e.to_sexp(), o.stdout));
+        let forms =
+            warrant::sexp::parse_all(&o.stdout).unwrap_or_else(|e| panic!("stdout is not S-expressions ({}): {}", e.to_sexp(), o.stdout));
         let kinds: Vec<&str> = forms.iter().filter_map(error_kind).collect();
         assert_eq!(kinds, [*want], "{}", o.stdout);
         assert_eq!(o.code, exit_class(want), "{}", o.stdout);
@@ -341,7 +352,8 @@ fn unknown_or_incomplete_options_are_usage_errors() {
 #[test]
 fn a_panic_prints_an_internal_error_and_exits_101() {
     let o = warrant(&["bench", &source("panic.wrt", "(defn main [] -> i64 1)\n"), "-n", "18446744073709551615", "--contracts", "off"]);
-    let forms = warrant::sexp::parse_all(&o.stdout).unwrap_or_else(|e| panic!("stdout is not S-expressions ({}): {}", e.to_sexp(), o.stdout));
+    let forms =
+        warrant::sexp::parse_all(&o.stdout).unwrap_or_else(|e| panic!("stdout is not S-expressions ({}): {}", e.to_sexp(), o.stdout));
     assert_eq!(forms.iter().filter_map(error_kind).collect::<Vec<_>>(), ["internal"], "{}", o.stdout);
     assert_eq!(o.code, exit_class("internal"), "{}", o.stdout);
 }

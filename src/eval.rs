@@ -9,9 +9,9 @@
 //! Integer arithmetic is checked: overflow is an error, never a wrap.
 
 use crate::ast::{Budget, Clause, Module};
+use crate::builtin::Builtin;
 use crate::contracts::Checks;
 use crate::diag::{ErrorKind, RtError};
-use crate::builtin::Builtin;
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str, Sexp};
 use std::collections::HashMap;
@@ -105,7 +105,9 @@ pub fn parse_params(v: &[Sexp]) -> R<Vec<String>> {
 
 impl Program {
     pub fn new(m: &Module, checks: &Checks) -> Program {
-        let kept = |cs: &[Clause], keep: &[bool]| cs.iter().zip(keep).enumerate().filter(|(_, (_, k))| **k).map(|(i, (c, _))| (i, c.src.clone())).collect();
+        let kept = |cs: &[Clause], keep: &[bool]| {
+            cs.iter().zip(keep).enumerate().filter(|(_, (_, k))| **k).map(|(i, (c, _))| (i, c.src.clone())).collect()
+        };
         let fns = m
             .fns
             .iter()
@@ -329,10 +331,7 @@ impl<'p> Interp<'p> {
 
     fn call_fn(&mut self, def: Rc<FnDef>, args: Vec<Value>) -> R<Value> {
         if args.len() != def.params.len() {
-            return Err(RtError::new(
-                ErrorKind::Arity,
-                format!("{} expects {} args, got {}", def.name, def.params.len(), args.len()),
-            ));
+            return Err(RtError::new(ErrorKind::Arity, format!("{} expects {} args, got {}", def.name, def.params.len(), args.len())));
         }
         let mut env = Env::default();
         for (p, a) in def.params.iter().zip(args) {
@@ -435,9 +434,7 @@ impl<'p> Interp<'p> {
                 if y == 0 {
                     return Err(RtError::new(ErrorKind::DivZero, format!("({} {} 0)", name, x)));
                 }
-                if b == B::Div { x.checked_div(y) } else { x.checked_rem_euclid(y) }
-                    .map(Value::Int)
-                    .ok_or_else(ovf)
+                if b == B::Div { x.checked_div(y) } else { x.checked_rem_euclid(y) }.map(Value::Int).ok_or_else(ovf)
             }
             B::Eq => {
                 arity(name, &args, 2)?;
@@ -546,7 +543,12 @@ impl<'p> Interp<'p> {
                         match r {
                             Value::Bool(true) => out.push(x.clone()),
                             Value::Bool(false) => {}
-                            o => return Err(RtError::new(ErrorKind::Type, format!("filter predicate must return bool, got {}", type_name(&o)))),
+                            o => {
+                                return Err(RtError::new(
+                                    ErrorKind::Type,
+                                    format!("filter predicate must return bool, got {}", type_name(&o)),
+                                ))
+                            }
                         }
                     }
                 }

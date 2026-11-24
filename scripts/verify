@@ -2,7 +2,7 @@
 # One command to check a change. Prints one line per step and keeps the
 # full logs and summary.md under target/verify/.
 #
-#   scripts/verify [--base REV]          clippy, tests, escape hatches in
+#   scripts/verify [--base REV]          format, clippy, tests, escape hatches in
 #                                        added lines, and the
 #                                        docs/verification.md items the
 #                                        change triggers
@@ -68,6 +68,7 @@ step() {
 }
 
 if [ "$mode" = check ] || [ "$mode" = full ]; then
+  step fmt cargo fmt --check
   step clippy cargo clippy --release --locked --all-targets -- -D warnings
   # A test that needs z3 fails rather than skips when z3 is missing.
   step test env WARRANT_REQUIRE_Z3=1 cargo test --release --locked

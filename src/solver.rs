@@ -10,8 +10,12 @@ pub enum Outcome {
     Proved,
     /// The negated goal is satisfiable: `model` holds the offending inputs,
     /// already rendered as Warrant values.
-    Failed { model: Vec<(String, String)> },
-    Unknown { reason: String },
+    Failed {
+        model: Vec<(String, String)>,
+    },
+    Unknown {
+        reason: String,
+    },
 }
 
 /// Solvers are shared across worker threads, one query per call.

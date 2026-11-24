@@ -73,15 +73,7 @@ fn ensures(r: &mut Rng) -> String {
 }
 
 /// Inclusive ranges the inputs are drawn from: signs, sizes and the i64 edges.
-const RANGES: &[(i64, i64)] = &[
-    (-3, 3),
-    (-10, -1),
-    (1, 10),
-    (-100, 100),
-    (0, 1000),
-    (-3037000499, 3037000499),
-    (i64::MIN, i64::MAX),
-];
+const RANGES: &[(i64, i64)] = &[(-3, 3), (-10, -1), (1, 10), (-100, 100), (0, 1000), (-3037000499, 3037000499), (i64::MIN, i64::MAX)];
 
 struct Case {
     src: String,
@@ -236,7 +228,8 @@ fn proved_permutations_hold_at_run_time() {
             1 => body.unwrapped(),
             _ => vec_expr(&mut r, 3).src(),
         };
-        let src = format!("(defn f [xs : (Vec i64) ys : (Vec i64)] -> (Vec i64)\n  (:ensures (perm? result {}))\n  {})\n", other, body.src());
+        let src =
+            format!("(defn f [xs : (Vec i64) ys : (Vec i64)] -> (Vec i64)\n  (:ensures (perm? result {}))\n  {})\n", other, body.src());
         let (forms, spans) = parse_all_spanned(&src).unwrap();
         let m = lower(&forms, &spans).unwrap();
         let Ok(ty) = warrant::types::check(&m) else { panic!("generated an ill-typed program:\n{}", src) };

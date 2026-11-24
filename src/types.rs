@@ -77,7 +77,11 @@ impl TypeInfo {
 enum Shape {
     Fixed(Vec<Ty>, Ty),
     /// `arg: None` means each argument may have its own type (`print`).
-    Variadic { min: usize, arg: Option<Ty>, ret: Ty },
+    Variadic {
+        min: usize,
+        arg: Option<Ty>,
+        ret: Ty,
+    },
 }
 
 /// Checks that can only run once a function's variables are solved.
@@ -199,11 +203,19 @@ impl Infer<'_> {
             match dfr {
                 Deferred::VariadicValue { var, builtin, at } => {
                     let Ty::Fn(ps, r) = self.resolve(&var) else {
-                        return Err(Diag::new(ErrorKind::Type, at, format!("cannot infer how many arguments `{}` takes here", builtin.name())));
+                        return Err(Diag::new(
+                            ErrorKind::Type,
+                            at,
+                            format!("cannot infer how many arguments `{}` takes here", builtin.name()),
+                        ));
                     };
                     let Shape::Variadic { min, arg, ret } = self.shape(builtin) else { unreachable!("only variadics are deferred") };
                     if ps.len() < min {
-                        return Err(Diag::new(ErrorKind::Arity, at, format!("{} expects at least {} args, used here with {}", builtin.name(), min, ps.len())));
+                        return Err(Diag::new(
+                            ErrorKind::Arity,
+                            at,
+                            format!("{} expects at least {} args, used here with {}", builtin.name(), min, ps.len()),
+                        ));
                     }
                     for p in &ps {
                         if let Some(a) = &arg {
@@ -214,7 +226,11 @@ impl Infer<'_> {
                 }
                 Deferred::Comparable { ty, at } => {
                     if self.resolve(&ty).has_fn() {
-                        return Err(Diag::new(ErrorKind::Type, at, format!("= cannot compare functions ({})", self.resolve(&ty).to_sexp())));
+                        return Err(Diag::new(
+                            ErrorKind::Type,
+                            at,
+                            format!("= cannot compare functions ({})", self.resolve(&ty).to_sexp()),
+                        ));
                     }
                 }
             }
@@ -402,7 +418,11 @@ impl Infer<'_> {
         if let ExprKind::Builtin(b) = &f.kind {
             if let Shape::Variadic { min, arg, ret } = self.shape(*b) {
                 if args.len() < min {
-                    return Err(Diag::new(ErrorKind::Arity, call.at, format!("{} expects at least {} args, got {}", name, min, args.len())));
+                    return Err(Diag::new(
+                        ErrorKind::Arity,
+                        call.at,
+                        format!("{} expects at least {} args, got {}", name, min, args.len()),
+                    ));
                 }
                 let mut ats = Vec::new();
                 for a in args {
@@ -462,11 +482,9 @@ mod tests {
 
     #[test]
     fn examples_typecheck() {
-        for src in [
-            include_str!("../examples/msort.wrt"),
-            include_str!("../examples/sum_sq.wrt"),
-            include_str!("../examples/effect_leak.wrt"),
-        ] {
+        for src in
+            [include_str!("../examples/msort.wrt"), include_str!("../examples/sum_sq.wrt"), include_str!("../examples/effect_leak.wrt")]
+        {
             if let Err(es) = check_src(src) {
                 panic!("{}", es.iter().map(Diag::to_sexp).collect::<Vec<_>>().join("\n"));
             }

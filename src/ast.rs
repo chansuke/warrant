@@ -414,10 +414,7 @@ fn params(v: &[Sexp], sp: &SpanTree) -> R<Vec<LambdaParam>> {
 }
 
 fn effect_set(es: &[Sexp], sp: &SpanTree) -> R<EffectSet> {
-    es.iter()
-        .zip(&sp.kids)
-        .map(|(e, esp)| sym(e).map(str::to_string).ok_or_else(|| syntax(esp.at, "effects must be symbols")))
-        .collect()
+    es.iter().zip(&sp.kids).map(|(e, esp)| sym(e).map(str::to_string).ok_or_else(|| syntax(esp.at, "effects must be symbols"))).collect()
 }
 
 fn budget(xs: &[Sexp], sps: &[SpanTree]) -> R<Budget> {
@@ -435,7 +432,8 @@ fn budget(xs: &[Sexp], sps: &[SpanTree]) -> R<Budget> {
 }
 
 pub fn parse_type(e: &Sexp, sp: &SpanTree) -> R<Type> {
-    let bad = || Diag::new(ErrorKind::Type, sp.at, format!("unknown type `{}`; expected i64, Bool, Str, (Vec T) or (Fn [T ...] R)", flat(e)));
+    let bad =
+        || Diag::new(ErrorKind::Type, sp.at, format!("unknown type `{}`; expected i64, Bool, Str, (Vec T) or (Fn [T ...] R)", flat(e)));
     match e {
         Sexp::Sym(s) => match s.as_str() {
             "i64" => Ok(Type::I64),
