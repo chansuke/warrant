@@ -1,4 +1,5 @@
-//! Static diagnostics. Like every other output, they print as S-expressions.
+//! Static diagnostics and run-time errors. Like every other output, they
+//! print as S-expressions.
 
 use crate::sexp::{quote_str, Pos};
 
@@ -93,5 +94,27 @@ impl Diag {
             None => String::new(),
         };
         format!("(error :kind {}{} :msg {})", self.kind, at, quote_str(&self.msg))
+    }
+}
+
+/// A run-time failure, with the functions on the call stack innermost first.
+#[derive(Debug)]
+pub struct RtError {
+    pub kind: ErrorKind,
+    pub msg: String,
+    pub trace: Vec<String>,
+}
+
+impl RtError {
+    pub fn new(kind: ErrorKind, msg: impl Into<String>) -> Self {
+        RtError { kind, msg: msg.into(), trace: Vec::new() }
+    }
+    pub fn to_sexp(&self) -> String {
+        let tr = if self.trace.is_empty() {
+            String::new()
+        } else {
+            format!(" :trace ({})", self.trace.join(" "))
+        };
+        format!("(error :kind {} :msg {}{})", self.kind, quote_str(&self.msg), tr)
     }
 }

@@ -34,7 +34,7 @@ formal/lean/check.sh                                       # Lean の証明を�
 | `src/wisp.rs` | Wisp 表示の印字と構文解析（可逆、`parse_spanned`） |
 | `src/ast.rs` | `lower`: defn と節の解析、名前解決、型注釈の解析。静的検査はすべてここの `Module` を読む |
 | `src/builtin.rs` | 組み込み関数の `enum Builtin` と名前の対応 |
-| `src/diag.rs` | 静的検査のエラー `Diag`（`:at` 付きの S式） |
+| `src/diag.rs` | 静的検査のエラー `Diag`（`:at` 付きの S式）と実行時のエラー `RtError` |
 | `src/types.rs` | 静的な型検査（関数内の単相推論、組み込みの多相は使う箇所ごとに実体化） |
 | `src/effects.rs` | 静的なエフェクト検査（呼び出しグラフの不動点、関数値の潜在エフェクト） |
 | `src/smt.rs` | SMT-LIB の語彙（前置き、ベクタのデータ型、`in64`、`tdiv`、`sorted-VI`、長さの上限） |
@@ -47,7 +47,7 @@ formal/lean/check.sh                                       # Lean の証明を�
 | `src/ir.rs` | 実行用 IR。`Program::new` が `Module` をスロットの環境にコンパイルし、`Checks` が残す節だけを含める |
 | `src/value.rs` | IR のランタイムの値 `Value` とベクタ。共有バッファと範囲、参照が1つのときだけその場で書く `cons` / `concat` |
 | `src/rt.rs` | IR の評価器 `Interp`（契約、エフェクト、組み込み関数）。`run` / `bench` はこれを使う |
-| `src/eval.rs` | M1 のインタプリタ（`Sexp` を評価する）。差分テストの oracle としてだけ残し、M2-7 で消す。`RtError` もここにある |
+| `src/eval.rs` | M1 のインタプリタ（`Sexp` を評価する）。差分テストの oracle としてだけ残し、M2-7 で消す |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |
 | `src/main.rs` | CLI。大きいスタックのスレッドで実行し、終了コードを返す |
 | `tests/m0.rs` | 例題の往復・実行・エラー種別の統合テスト |

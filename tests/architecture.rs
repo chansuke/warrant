@@ -27,10 +27,6 @@ const LAYERS: &[&[&str]] = &[
     &["eval"],
 ];
 
-/// Uses that point up, from before this check existed. This list only
-/// shrinks: cut one cycle, then remove its entry here. Never add one.
-const KNOWN_VIOLATIONS: &[(&str, &str)] = &[("rt", "eval")];
-
 #[test]
 fn modules_use_only_lower_layers() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -47,19 +43,17 @@ fn modules_use_only_lower_layers() {
          Add each to LAYERS at the lowest layer that holds everything it uses, and to the module table in CLAUDE.md.",
         found.unknown
     );
-    let new: Vec<&String> = found.violations.iter().filter(|(pair, _)| !KNOWN_VIOLATIONS.contains(&(pair.0.as_str(), pair.1.as_str()))).flat_map(|(_, at)| at).collect();
+    let new: Vec<&String> = found.violations.values().flatten().collect();
     assert!(
         new.is_empty(),
         "{} uses point up or sideways in the layers:\n  {}\n\n\
          A module may use only modules in lower layers (LAYERS in tests/architecture.rs).\n\
          Fix the design, not the check: move what both modules need into a lower module, or let the caller pass it in \
          (a value, a function, or a trait the lower module defines). Do not re-export the item from another module to \
-         hide the use, and do not add the pair to KNOWN_VIOLATIONS.",
+         hide the use.",
         new.len(),
         new.iter().map(|s| s.as_str()).collect::<Vec<_>>().join("\n  ")
     );
-    let gone: Vec<&(&str, &str)> = KNOWN_VIOLATIONS.iter().filter(|(from, to)| !found.violations.contains_key(&(from.to_string(), to.to_string()))).collect();
-    assert!(gone.is_empty(), "{:?} no longer happen. Remove them from KNOWN_VIOLATIONS in tests/architecture.rs so they cannot come back.", gone);
 }
 
 #[test]

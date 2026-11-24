@@ -10,7 +10,7 @@
 
 use crate::ast::{Budget, Clause, Module};
 use crate::contracts::Checks;
-use crate::diag::ErrorKind;
+use crate::diag::{ErrorKind, RtError};
 use crate::builtin::Builtin;
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str, Sexp};
@@ -72,27 +72,6 @@ pub struct FnDef {
     pub effects: Option<Vec<String>>,
     pub budget: Option<Budget>,
     pub body: Vec<Sexp>,
-}
-
-#[derive(Debug)]
-pub struct RtError {
-    pub kind: ErrorKind,
-    pub msg: String,
-    pub trace: Vec<String>,
-}
-
-impl RtError {
-    pub fn new(kind: ErrorKind, msg: impl Into<String>) -> Self {
-        RtError { kind, msg: msg.into(), trace: Vec::new() }
-    }
-    pub fn to_sexp(&self) -> String {
-        let tr = if self.trace.is_empty() {
-            String::new()
-        } else {
-            format!(" :trace ({})", self.trace.join(" "))
-        };
-        format!("(error :kind {} :msg {}{})", self.kind, quote_str(&self.msg), tr)
-    }
 }
 
 type R<T> = Result<T, RtError>;
