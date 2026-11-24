@@ -8,7 +8,7 @@
 use std::time::Instant;
 use warrant::ast::{self, Module};
 use warrant::cache::Cache;
-use warrant::contracts::{self, Checks, ClauseLevels, Level, Mode};
+use warrant::contracts::{Checks, ClauseLevels, Level, Mode};
 use warrant::diag::{Diag, ErrorKind};
 use warrant::ir::Program;
 use warrant::rt::Interp;
@@ -241,7 +241,7 @@ fn prepare(m: &Module, opts: &[String]) -> Result<Prepared, i32> {
             Some(info) => match Prover::from_opts(opts)?.prove(m, info) {
                 None => extra = format!(" :note {}", quote_str(NO_Z3)),
                 Some((results, ns)) => {
-                    levels = Some(contracts::levels(m, &results));
+                    levels = Some(verify::levels(m, &results));
                     extra = format!(" :verify-ms {}", ms(ns));
                 }
             },
@@ -280,7 +280,7 @@ fn check(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
         Err(c) => return c,
     };
     let proved = typed.as_ref().ok().and_then(|info| prover.prove(m, info));
-    let levels = proved.as_ref().map(|(results, _)| contracts::levels(m, results));
+    let levels = proved.as_ref().map(|(results, _)| verify::levels(m, results));
 
     let mut s = format!(
         "(check\n  (file {})\n  (parse-ms {})\n  (roundtrip {})\n  (fns",
