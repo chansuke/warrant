@@ -4,9 +4,24 @@
 //! that leans on what the two evaluators do differently: frame slots,
 //! captures, shadowing, closures, contracts, effects and dynamic type errors.
 
+use std::cell::Cell;
+use std::sync::OnceLock;
 use warrant::ast::{lower, Module};
 use warrant::contracts::{Checks, Mode};
+use warrant::rt::Pool;
 use warrant::sexp::parse_all_spanned;
+
+/// Four threads, shared by every test: `agree` also runs each program on it.
+fn threads() -> &'static Pool {
+    static POOL: OnceLock<Pool> = OnceLock::new();
+    POOL.get_or_init(|| Pool::new(4).unwrap())
+}
+
+thread_local! {
+    /// Forks the parallel runs of this test thread made, so a test can see
+    /// that it reached the parallel path.
+    static FORKS: Cell<u64> = const { Cell::new(0) };
+}
 
 struct Rng(u64);
 
@@ -104,7 +119,16 @@ impl Gen {
                 format!("(let [f (fn [{}] (fn [y] {}))] ((f {}) {}))", n, inner, self.int(d - 1), self.int(d - 1))
             }
             13 => format!("(do (print {}) {})", self.int(d - 1), self.int(d - 1)),
-            14 if self.may_call_helper => format!("(helper {} {})", self.int(d - 1), self.vec(d - 1)),
+            14 if self.may_call_helper && self.r.below(2) == 0 => format!("(helper {} {})", self.int(d - 1), self.vec(d - 1)),
+            // Two calls of a pure `helper` are forked (D30).
+            14 if self.may_call_helper => format!(
+                "({} (helper {} {}) (helper {} {}))",
+                self.r.pick(&["+", "-", "*"]),
+                self.int(d - 1),
+                self.vec(d - 1),
+                self.int(d - 1),
+                self.vec(d - 1)
+            ),
             14 => self.int_var(),
             // A dynamic type error: only reachable without the type checker.
             _ => format!("(+ {} {})", self.int(d - 1), self.r.pick(&["true", "[1]", "\"s\"", "twice"])),
@@ -193,15 +217,24 @@ fn run_m1(m: &Module, checks: &Checks) -> (Outcome, String) {
 }
 
 fn run_ir(m: &Module, checks: &Checks) -> (Outcome, String) {
+    run_ir_on(m, checks, &Pool::new(1).unwrap())
+}
+
+fn run_ir_on(m: &Module, checks: &Checks, pool: &Pool) -> (Outcome, String) {
     let prog = warrant::ir::Program::new(m, checks);
     let mut it = warrant::rt::Interp::new(&prog, true);
-    let r = it.call_main().map(|v| prog.show(&v)).map_err(|e| (e.kind.to_string(), e.msg, e.trace));
+    let r = pool.call_main(&mut it).map(|v| prog.show(&v)).map_err(|e| (e.kind.to_string(), e.msg, e.trace));
+    FORKS.with(|f| f.set(f.get() + it.prof.forks));
     (r, counters(&it.prof))
 }
 
+/// The M1 interpreter, the IR runtime on one thread, and the IR runtime on
+/// four threads give the same value or error, trace and counters.
 fn agree(src: &str, m: &Module, checks: &Checks) -> Outcome {
     let (old, new) = (run_m1(m, checks), run_ir(m, checks));
     assert_eq!(old, new, "the runtimes disagree on:\n{}", src);
+    let parallel = run_ir_on(m, checks, threads());
+    assert_eq!(new, parallel, "the parallel run differs on:\n{}", src);
     new.0
 }
 
@@ -323,7 +356,9 @@ fn generated_programs_agree() {
                 Err((kind, _, _)) => *kinds.entry(kind).or_insert(0) += 1,
             }
         }
-        eprintln!("ok {} errors {:?}", ok, kinds);
+        let forks = FORKS.with(Cell::get);
+        eprintln!("ok {} errors {:?} forks {}", ok, kinds, forks);
+        assert!(forks >= 100, "the generator reached the parallel path {} times", forks);
         // The generator must reach values and the error kinds the runtimes raise.
         assert!(ok >= 300, "ok {} errors {:?}", ok, kinds);
         for k in ["type", "overflow", "bounds", "div-zero", "effect", "contract"] {
@@ -418,4 +453,90 @@ fn deep_values_free_without_recursion() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+/// The forks a program makes on four threads with every contract checked.
+fn forks_of(src: &str) -> u64 {
+    let before = FORKS.with(Cell::get);
+    let m = module(src);
+    let _ = run_ir_on(&m, &Checks::new(&m, Mode::Runtime, None), threads());
+    FORKS.with(Cell::get) - before
+}
+
+/// A forked call reports what evaluating its arguments in order reports
+/// (D30): the first failure, even when the task beside it would never stop.
+#[test]
+fn forked_arguments_fail_in_order() {
+    on_big_stack(|| {
+        let fns = "(defn bad [n : i64] -> i64 (/ 100 (- n n)))
+                   (defn ok [n : i64] -> i64 (+ n 1))
+                   (defn ones [n : i64] -> (Vec i64) (if (= n 0) [] (cons 1 (ones (- n 1)))))
+                   (defn spin [n : i64] -> i64 (len (ones n)))";
+        for (body, want) in [
+            ("(+ (ok 1) (ok 2))", Ok("5".to_string())),
+            ("(+ (ok 1) (bad 2))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
+            ("(+ (bad 1) (bad 2))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
+            ("(+ (ok 1) (+ 2 (bad 3)) (ok 4))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
+            // Without stopping, the task beside would build 2*10^8 elements.
+            ("(+ (bad 1) (spin 200000000))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
+        ] {
+            let src = format!("{} (defn main [] -> i64 {})", fns, body);
+            assert_eq!(same(&src), want, "{}", body);
+            assert!(forks_of(&src) > 0, "{} did not fork", body);
+        }
+    });
+}
+
+/// Only arguments that perform no effect and call no unknown function value
+/// are forked, so what a program prints keeps its order.
+#[test]
+fn effects_are_never_forked() {
+    on_big_stack(|| {
+        let fns = "(defn ok [n : i64] -> i64 (+ n 1))
+                   (defn loud [n : i64] -> i64 (do (print n) n))";
+        // Each has two calls of the pure `ok` among the arguments, which
+        // alone would fork; `(+ (ok 1) (ok 2))` does.
+        for body in [
+            "(+ (ok 1) (ok 2) (loud 3))",
+            "(+ (ok 1) (ok 2) (do (print 0) 3))",
+            "(+ (ok 1) (ok (do (print 2) 2)))",
+            "(let [f (fn [x] (do (print x) x))] (+ (ok 1) (ok 2) (len (map f [3]))))",
+            "(let [f (fn [x] (do (print x) x))] (+ (ok 1) (ok (f 2))))",
+            "(let [f (fn [x] (do (print x) x))] (+ (ok 1) (ok 2) (len (map (if true f f) [3]))))",
+        ] {
+            let src = format!("{} (defn main [] -> i64 {})", fns, body);
+            let _ = same(&src);
+            assert_eq!(forks_of(&src), 0, "{} forked", body);
+        }
+    });
+}
+
+/// M2-5's acceptance: the same program run 100 times on several threads
+/// gives the same value or error, trace and counters every time.
+#[test]
+fn parallel_runs_repeat_exactly() {
+    on_big_stack(|| {
+        let tree = |leaf: &str| {
+            format!(
+                "(defn t [lo : i64 hi : i64] -> i64
+                   (if (= (- hi lo) 1) {}
+                     (let [mid (/ (+ lo hi) 2)] (+ (t lo mid) (t mid hi)))))
+                 (defn main [] -> i64 (t 0 256))",
+                leaf
+            )
+        };
+        let pool = Pool::new(8).unwrap();
+        for leaf in ["(* lo lo)", "(/ 1000 (- lo 37))", "(if (> lo 90) (/ 1 0) (/ 1000 (- lo 200)))"] {
+            let src = tree(leaf);
+            let want = same(&src);
+            let m = module(&src);
+            let checks = Checks::new(&m, Mode::Runtime, None);
+            let first = run_ir_on(&m, &checks, &pool);
+            assert_eq!(first.0, want);
+            for _ in 0..100 {
+                assert_eq!(run_ir_on(&m, &checks, &pool), first, "{}", leaf);
+            }
+            assert!(forks_of(&src) > 0);
+        }
+    });
 }
