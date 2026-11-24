@@ -272,6 +272,7 @@ fn exit_class(kind: &str) -> i32 {
     match kind {
         "type" | "effect" | "contract" | "overflow" | "div-zero" | "bounds" | "arity" | "unbound" | "stack" | "alloc" => 1,
         "parse" | "syntax" | "load" | "io" | "usage" => 2,
+        "internal" => 101,
         other => panic!("kind {} has no exit class; add it to exit_class", other),
     }
 }
@@ -336,4 +337,14 @@ fn unknown_or_incomplete_options_are_usage_errors() {
     }
     let o = warrant(&["run", &ok, "--contracts", "off", "--no-cache", "--timeout-ms", "50"]);
     assert_eq!((o.code, o.stdout.trim()), (0, "(result 1)"));
+}
+
+/// A panic is a bug in warrant, yet stdout must still parse. Any input that
+/// reaches a panic will do here; today a huge `-n` overflows a Vec capacity.
+#[test]
+fn a_panic_prints_an_internal_error_and_exits_101() {
+    let o = warrant(&["bench", &source("panic.wrt", "(defn main [] -> i64 1)\n"), "-n", "18446744073709551615", "--contracts", "off"]);
+    let forms = warrant::sexp::parse_all(&o.stdout).unwrap_or_else(|e| panic!("stdout is not S-expressions ({}): {}", e.to_sexp(), o.stdout));
+    assert_eq!(forms.iter().filter_map(error_kind).collect::<Vec<_>>(), ["internal"], "{}", o.stdout);
+    assert_eq!(o.code, exit_class("internal"), "{}", o.stdout);
 }

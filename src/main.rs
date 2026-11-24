@@ -2,7 +2,8 @@
 //! so an agent loop can parse it without scraping.
 //!
 //! Exit codes: 0 ok, 1 runtime/contract/effect error or failed check,
-//! 2 parse/load/usage error, 3 performance budget exceeded.
+//! 2 parse/load/usage error, 3 performance budget exceeded, 101 internal error
+//! (a panic). `diag::ErrorKind::exit_code` decides 1, 2 and 101.
 
 use std::time::Instant;
 use warrant::ast::{self, Module};
@@ -20,12 +21,26 @@ use warrant::{effects, specdiff, types, vc, verify, wisp};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    report_panics_as_internal_errors();
     // Tree-walking recursion is deep; give it room.
     let child = std::thread::Builder::new()
         .stack_size(1 << 30)
         .spawn(move || real_main(args))
         .expect("spawn main thread");
-    std::process::exit(child.join().unwrap_or(101));
+    std::process::exit(child.join().unwrap_or(ErrorKind::Internal.exit_code()));
+}
+
+/// A panic is a bug, but stdout must still parse: print it as
+/// `(error :kind internal ...)` and keep Rust's report on stderr.
+fn report_panics_as_internal_errors() {
+    let rust_report = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info.payload();
+        let msg = payload.downcast_ref::<&str>().copied().or_else(|| payload.downcast_ref::<String>().map(String::as_str)).unwrap_or("panic");
+        let at = info.location().map_or(String::new(), |l| format!(" :at {}", quote_str(&format!("{}:{}", l.file(), l.line()))));
+        println!("(error :kind {} :msg {}{})", ErrorKind::Internal, quote_str(msg), at);
+        rust_report(info);
+    }));
 }
 
 const USAGE: &str = "usage: warrant <command> FILE [options]
