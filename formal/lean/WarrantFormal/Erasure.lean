@@ -1,7 +1,7 @@
 /-!
 # Erasing proved preconditions
 
-`contracts::levels` stops checking a function's `requires` at run time when
+`verify::levels` stops checking a function's `requires` at run time when
 
 1. every syntactic call site of the function has a proved VC,
 2. the function is never used as a value, and
@@ -123,7 +123,7 @@ def ResOk (erased : Fn → Bool) : Option Res → Prop
 section
 variable (erased : Fn → Bool)
 
-/-- The conditions `contracts::levels` checks, over the whole program. -/
+/-- The conditions `verify::levels` checks, over the whole program. -/
 structure Erasable (main : Fn) : Prop where
   not_main : erased main = false
   not_a_value : ∀ f g, erased f = true → refs f (P.body g) = false
@@ -226,7 +226,7 @@ theorem run_agree {main : Fn} (h : Erasable P erased main) :
       have hp' : P.pre f x = false := by simpa using hp
       simp [run, hp', hf, ResOk]
 
-/-- Erasing the preconditions `contracts::levels` marks proved changes nothing. -/
+/-- Erasing the preconditions `verify::levels` marks proved changes nothing. -/
 theorem erasure_sound {main : Fn} (h : Erasable P erased main) (n : Nat) (x : Val)
     (hx : ValOk erased x) : full n main x = erasedRun n main x :=
   (run_agree P erased h n main x hx (fun he => by simp [h.not_main] at he)).1

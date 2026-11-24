@@ -40,8 +40,8 @@ formal/lean/check.sh                                       # Lean の証明を�
 | `src/smt.rs` | SMT-LIB の語彙（前置き、ベクタのデータ型、`in64`、`tdiv`、`sorted-VI`、長さの上限） |
 | `src/vc.rs` | 記号実行による VC 生成。1つの `Obligation` が1つの完結したスクリプト |
 | `src/solver.rs` | `trait Solver` と `Z3`（`z3 -in` のサブプロセス、`get-value` で反例を読む） |
-| `src/verify.rs` | VC を並列にソルバに渡し（キャッシュ経由）、`(smt ...)` の集計を作る |
-| `src/contracts.rs` | 節ごとの検証レベル（proved / runtime-checked）と、モードから実行時に検査する節を決める `Checks` |
+| `src/verify.rs` | VC を並列にソルバに渡し（キャッシュ経由）、`(smt ...)` の集計を作る。結果から節ごとのレベルを決める `levels` |
+| `src/contracts.rs` | 節ごとの検証レベル（proved / runtime-checked）の型と、モードから実行時に検査する節を決める `Checks` |
 | `src/specdiff.rs` | 仕様差分ガード。節ごとの変更と判定（weakened / strengthened / refined / new）、精緻化の SMT 証明 |
 | `src/cache.rs` | VC 単位の証明キャッシュ（既定 `~/.cache/warrant/proofs`、キーはソルバの fingerprint とスクリプト） |
 | `src/ir.rs` | 実行用 IR。`Program::new` が `Module` をスロットの環境にコンパイルし、`Checks` が残す節だけを含める |

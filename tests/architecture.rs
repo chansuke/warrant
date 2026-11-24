@@ -29,7 +29,7 @@ const LAYERS: &[&[&str]] = &[
 
 /// Uses that point up, from before this check existed. This list only
 /// shrinks: cut one cycle, then remove its entry here. Never add one.
-const KNOWN_VIOLATIONS: &[(&str, &str)] = &[("contracts", "vc"), ("contracts", "verify"), ("rt", "eval")];
+const KNOWN_VIOLATIONS: &[(&str, &str)] = &[("rt", "eval")];
 
 #[test]
 fn modules_use_only_lower_layers() {
