@@ -43,6 +43,8 @@ impl Drop for Closure {
 /// vectors or closures, so freeing a deeply nested value (a vector of a
 /// vector of ..., or the buffers a ConsTail loop releases at once) never
 /// overflows the stack. Values another reference still holds are left alone.
+/// `Arc::into_inner` hands the contents to exactly one of the owners that
+/// let go, so this holds when owners on several threads drop at once.
 pub(crate) fn free_nested(values: &mut Vec<Value>) {
     if !values.iter().any(|v| matches!(v, Value::Vec(_) | Value::Closure(_))) {
         return;
@@ -50,19 +52,19 @@ pub(crate) fn free_nested(values: &mut Vec<Value>) {
     let mut work = std::mem::take(values);
     while let Some(v) = work.pop() {
         match v {
-            Value::Vec(mut xs) => {
-                if let Some(buf) = xs.unique_buf() {
-                    work.append(buf);
+            Value::Vec(xs) => {
+                if let Some(mut elems) = xs.take_buf() {
+                    work.append(&mut elems);
                 }
             }
-            Value::Closure(mut c) => {
-                if let Some(c) = Arc::get_mut(&mut c) {
+            Value::Closure(c) => {
+                if let Some(mut c) = Arc::into_inner(c) {
                     work.append(&mut c.captured);
                 }
             }
             _ => {}
         }
-        // `v` is dropped here with nothing left inside it.
+        // Whatever is dropped here has nothing left inside it.
     }
 }
 

@@ -7,6 +7,7 @@
 //! small slice does not keep a large buffer alive.
 
 use crate::rt::Value;
+use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 /// Fills dead buffer slots.
@@ -14,7 +15,10 @@ const DEAD: Value = Value::Bool(false);
 
 #[derive(Clone)]
 pub struct Vector {
-    buf: Arc<Vec<Value>>,
+    /// Released only through `Arc::into_inner` (`take_buf`), so of the
+    /// owners that drop it, exactly one gets the elements, even when they
+    /// drop at once on different threads.
+    buf: ManuallyDrop<Arc<Vec<Value>>>,
     start: usize,
     len: usize,
 }
@@ -32,21 +36,26 @@ impl Copied {
 
 impl Drop for Vector {
     fn drop(&mut self) {
-        if let Some(buf) = Arc::get_mut(&mut self.buf) {
-            crate::rt::free_nested(buf);
+        // SAFETY: `buf` is not used again; `drop` runs once.
+        let buf = unsafe { ManuallyDrop::take(&mut self.buf) };
+        if let Some(mut elems) = Arc::into_inner(buf) {
+            crate::rt::free_nested(&mut elems);
         }
     }
 }
 
 impl Vector {
-    /// The buffer, when no other value refers to it.
-    pub(crate) fn unique_buf(&mut self) -> Option<&mut Vec<Value>> {
-        Arc::get_mut(&mut self.buf)
+    /// Gives up this reference to the buffer without running `drop`, and
+    /// returns the elements if it was the last one.
+    pub(crate) fn take_buf(self) -> Option<Vec<Value>> {
+        let mut me = ManuallyDrop::new(self);
+        // SAFETY: `me` is never dropped, so `buf` is taken exactly once.
+        Arc::into_inner(unsafe { ManuallyDrop::take(&mut me.buf) })
     }
 
     pub fn new(items: Vec<Value>) -> Vector {
         let len = items.len();
-        Vector { buf: Arc::new(items), start: 0, len }
+        Vector { buf: ManuallyDrop::new(Arc::new(items)), start: 0, len }
     }
 
     pub fn as_slice(&self) -> &[Value] {
@@ -114,7 +123,7 @@ impl Vector {
         let mut buf = Vec::with_capacity(room + self.len);
         buf.resize(room, DEAD);
         buf.extend_from_slice(self.as_slice());
-        Vector { buf: Arc::new(buf), start: room, len: self.len }
+        Vector { buf: ManuallyDrop::new(Arc::new(buf)), start: room, len: self.len }
     }
 
     pub fn concat(mut self, mut other: Vector) -> (Vector, Copied) {
