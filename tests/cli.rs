@@ -262,15 +262,27 @@ fn a_proof_cache_shipped_with_the_source_is_not_trusted() {
 
 #[test]
 fn report_breaks_time_down_by_function_clause_and_builtin() {
-    let o = warrant(&["run", "examples/msort.wrt", "--report", "--contracts", "runtime"]);
-    assert_eq!(o.code, 0, "{}", o.stdout);
     let num = |line: &str, key: &str| -> f64 { line.split(key).nth(1).unwrap().split([' ', ')']).next().unwrap().parse().unwrap() };
-    let msort = o.stdout.lines().find(|l| l.trim_start().starts_with("(msort :calls")).expect("msort in hot");
-    assert!(num(msort, ":self-ms ") <= num(msort, ":incl-ms "), "{}", msort);
-    // Clause numbers match `check`: perm? is merge's ensures 1.
-    assert!(o.stdout.contains("(merge ensures 1 :checks 21587 "), "{}", o.stdout);
-    assert!(o.stdout.contains("(perm? 25586)"), "{}", o.stdout);
-    assert!(!o.stdout.contains("until M1"), "{}", o.stdout);
+    // On several threads `:self-ms` adds up every thread's time while
+    // `:incl-ms` stays the wall time of the outermost call, so only one
+    // thread keeps self within incl. The counts do not depend on threads.
+    for threads in ["1", "4"] {
+        let o = warrant(&["run", "examples/msort.wrt", "--report", "--contracts", "runtime", "--threads", threads]);
+        assert_eq!(o.code, 0, "{}", o.stdout);
+        let msort = o.stdout.lines().find(|l| l.trim_start().starts_with("(msort :calls")).expect("msort in hot");
+        assert!(msort.contains(":calls 3999 "), "{}", msort);
+        if threads == "1" {
+            assert!(num(msort, ":self-ms ") <= num(msort, ":incl-ms "), "{}", msort);
+            assert!(o.stdout.contains("(threads 1) (forks 0)"), "{}", o.stdout);
+        } else {
+            assert!(o.stdout.contains("(threads 4) (forks "), "{}", o.stdout);
+            assert!(!o.stdout.contains("(forks 0)"), "{}", o.stdout);
+        }
+        // Clause numbers match `check`: perm? is merge's ensures 1.
+        assert!(o.stdout.contains("(merge ensures 1 :checks 21587 "), "{}", o.stdout);
+        assert!(o.stdout.contains("(perm? 25586)"), "{}", o.stdout);
+        assert!(!o.stdout.contains("until M1"), "{}", o.stdout);
+    }
 }
 
 /// The exit code each error kind promises: 1 for a failure of the program,
@@ -356,4 +368,19 @@ fn a_panic_prints_an_internal_error_and_exits_101() {
         warrant::sexp::parse_all(&o.stdout).unwrap_or_else(|e| panic!("stdout is not S-expressions ({}): {}", e.to_sexp(), o.stdout));
     assert_eq!(forms.iter().filter_map(error_kind).collect::<Vec<_>>(), ["internal"], "{}", o.stdout);
     assert_eq!(o.code, exit_class("internal"), "{}", o.stdout);
+}
+
+#[test]
+fn threads_must_be_a_positive_count() {
+    for bad in ["0", "-1", "many"] {
+        let o = warrant(&["run", "examples/msort.wrt", "--threads", bad]);
+        assert_eq!(o.code, 2, "{}", o.stdout);
+        assert!(o.stdout.starts_with("(error :kind usage :msg \"--threads must be a positive integer\")"), "{}", o.stdout);
+    }
+    let o = warrant(&["run", "examples/msort.wrt", "--threads", "100000"]);
+    assert_eq!(o.code, 2, "{}", o.stdout);
+    assert!(o.stdout.starts_with("(error :kind usage :msg \"--threads must be at most 1024\")"), "{}", o.stdout);
+    let o = warrant(&["bench", "examples/msort.wrt", "-n", "1", "--threads", "2"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert!(o.stdout.contains("(threads 2)"), "{}", o.stdout);
 }

@@ -12,7 +12,7 @@ use warrant::contracts::{Checks, ClauseLevels, Level, Mode};
 use warrant::diag::{Diag, ErrorKind};
 use warrant::ir::Program;
 use warrant::profile::{self, ms, RunInfo};
-use warrant::rt::Interp;
+use warrant::rt::{Interp, Pool};
 use warrant::sexp::{self, quote_str, Sexp, SpanTree};
 use warrant::solver::Z3;
 use warrant::types::TypeInfo;
@@ -42,23 +42,27 @@ fn report_panics_as_internal_errors() {
 }
 
 const USAGE: &str = "usage: warrant <command> FILE [options]
-  run   FILE [--report] [--contracts auto|runtime|off] [--no-typecheck]   run (defn main [] ...)
+  run   FILE [--report] [--contracts auto|runtime|off] [--no-typecheck] [--threads N]
+                                                 run (defn main [] ...)
   check FILE                                     parse, load, type-check, prove contracts with z3
   fmt   FILE [--to wisp|sexp]                    convert between canonical S-expr and the Wisp view
-  bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck]
+  bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck] [--threads N]
                                                  time main N times; enforce (:budget (wall-ms N)) on main
   spec-diff OLD NEW [--no-smt] [--timeout-ms N]  list spec changes; exit 1 if a contract was weakened
 Proof options (check, and run/bench with --contracts auto, the default):
   --timeout-ms N (per VC, default 2000)  --jobs N (default: all cores)  --no-cache
   --cache-dir D (default: $XDG_CACHE_HOME/warrant/proofs or ~/.cache/warrant/proofs)
+--threads N (default: all cores, at most 1024) runs calls of pure functions in parallel; 1 runs on one thread.
 --no-contracts is --contracts off. FILE ending in .wisp is read as the Wisp view; anything else as canonical S-expr (.wrt).";
 
 /// The options each command takes. `true` marks one that takes a value.
 /// `opt_value` and flag lookups read only what `check_opts` let through, so a
 /// new option goes here first.
 const PROOF_OPTS: &[(&str, bool)] = &[("--timeout-ms", true), ("--jobs", true), ("--no-cache", false), ("--cache-dir", true)];
-const RUN_OPTS: &[(&str, bool)] = &[("--report", false), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false)];
-const BENCH_OPTS: &[(&str, bool)] = &[("-n", true), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false)];
+const RUN_OPTS: &[(&str, bool)] =
+    &[("--report", false), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false), ("--threads", true)];
+const BENCH_OPTS: &[(&str, bool)] =
+    &[("-n", true), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false), ("--threads", true)];
 const FMT_OPTS: &[(&str, bool)] = &[("--to", true)];
 const SPEC_DIFF_OPTS: &[(&str, bool)] = &[("--no-smt", false), ("--timeout-ms", true)];
 
@@ -323,16 +327,40 @@ fn check(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
     }
 }
 
+/// More threads than this is a mistake: each reserves a 1 GiB stack, and
+/// starting 100,000 of them did not finish in two minutes.
+const MAX_THREADS: u64 = 1024;
+
+/// The pool `--threads` asks for, all cores by default.
+fn pool(opts: &[String]) -> Result<Pool, i32> {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as u64;
+    let threads = positive(opts, "--threads", cores.min(MAX_THREADS))?;
+    if threads > MAX_THREADS {
+        return Err(usage_error(&format!("--threads must be at most {}", MAX_THREADS)));
+    }
+    let threads = threads as usize;
+    Pool::new(threads).map_err(|e| {
+        println!("{}", e.to_sexp());
+        e.kind.exit_code()
+    })
+}
+
 fn run(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
     let p = match prepare(m, opts) {
         Ok(p) => p,
         Err(c) => return c,
     };
+    let pool = match pool(opts) {
+        Ok(pool) => pool,
+        Err(c) => return c,
+    };
     let report = opts.iter().any(|o| o == "--report");
     let mut it = Interp::new(&p.prog, report);
+    let cpu0 = profile::cpu_ns();
     let t = Instant::now();
-    let r = it.call_main();
+    let r = pool.call_main(&mut it);
     let wall_ns = t.elapsed().as_nanos();
+    let cpu_ns = cpu0.zip(profile::cpu_ns()).map(|(a, b)| b.saturating_sub(a));
     let code = match &r {
         Ok(v) => {
             println!("(result {})", p.prog.show(v));
@@ -345,7 +373,7 @@ fn run(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
     };
     if report {
         let status = if code == 0 { "ok" } else { "error" };
-        let info = RunInfo { wall_ns, contracts: &p.contracts, types_ns: p.types_ns };
+        let info = RunInfo { wall_ns, threads: pool.threads(), cpu_ns, contracts: &p.contracts, types_ns: p.types_ns };
         println!("{}", profile::report(path, status, src.parse_ns, &info, &it.prof));
     }
     code
@@ -360,11 +388,15 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
         Ok(p) => p,
         Err(c) => return c,
     };
+    let pool = match pool(opts) {
+        Ok(pool) => pool,
+        Err(c) => return c,
+    };
     let mut times = Vec::with_capacity(n);
     for i in 0..=n {
         let mut it = Interp::new(&p.prog, false);
         let t = Instant::now();
-        if let Err(e) = it.call_main() {
+        if let Err(e) = pool.call_main(&mut it) {
             println!("{}", e.to_sexp());
             return e.kind.exit_code();
         }
@@ -376,9 +408,10 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
     let mean = times.iter().sum::<u128>() / n as u128;
     let median = times[n / 2];
     let mut s = format!(
-        "(bench\n  (file {})\n  (n {}) (contracts {})\n  (wall-ms :min {} :median {} :mean {} :max {})",
+        "(bench\n  (file {})\n  (n {}) (threads {}) (contracts {})\n  (wall-ms :min {} :median {} :mean {} :max {})",
         quote_str(path),
         n,
+        pool.threads(),
         p.contracts,
         ms(times[0]),
         ms(median),

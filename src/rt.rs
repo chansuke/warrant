@@ -8,14 +8,53 @@
 
 use crate::builtin::Builtin;
 use crate::diag::{ErrorKind, RtError};
-use crate::ir::{Clause, Fn, Node, Program};
+use crate::ir::{Clause, Fn, Fork, Node, Program};
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str};
 use crate::value::{Closure, Copied, Value, Vector};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
 const MAX_DEPTH: usize = 200_000;
+
+/// Forks nest up to `log2(threads)` plus this many levels; deeper ones run
+/// in their task (D30). M2-6 measures it.
+const FORK_SLACK: usize = 2;
+
+/// The threads a run uses. One runs on the calling thread and never forks.
+pub struct Pool(Option<rayon::ThreadPool>);
+
+impl Pool {
+    /// Every worker gets the 1 GiB stack the CLI's main thread has, since a
+    /// forked task may recurse as deep as the program does.
+    pub fn new(threads: usize) -> Result<Pool, RtError> {
+        if threads <= 1 {
+            return Ok(Pool(None));
+        }
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .stack_size(1 << 30)
+            .thread_name(|i| format!("warrant-{}", i))
+            .build()
+            .map(|p| Pool(Some(p)))
+            .map_err(|e| RtError::new(ErrorKind::Internal, format!("cannot start {} threads: {}", threads, e)))
+    }
+
+    pub fn threads(&self) -> usize {
+        self.0.as_ref().map_or(1, rayon::ThreadPool::current_num_threads)
+    }
+
+    /// Runs `main` on this pool's threads, forking where the program allows.
+    pub fn call_main(&self, it: &mut Interp<'_>) -> R<Value> {
+        let threads = self.threads();
+        it.forks_left = if threads <= 1 { 0 } else { threads.next_power_of_two().trailing_zeros() as usize + FORK_SLACK };
+        match &self.0 {
+            None => it.call_main(),
+            Some(p) => p.install(|| it.call_main()),
+        }
+    }
+}
 
 type R<T> = Result<T, RtError>;
 
@@ -109,11 +148,69 @@ pub struct Interp<'p> {
     /// Functions on the call stack, innermost last.
     effect_stack: Vec<usize>,
     depth: usize,
+    /// How many more forks may nest below this point; 0 runs `Fork` as the
+    /// call it wraps.
+    forks_left: usize,
+    /// Set when the task this one runs beside has failed: what this task
+    /// computes is then thrown away, so it stops at the next call.
+    stops: Vec<Arc<AtomicBool>>,
 }
 
 impl<'p> Interp<'p> {
     pub fn new(prog: &'p Program, profile: bool) -> Self {
-        Interp { prog, prof: Profiler::new(profile), effect_stack: Vec::new(), depth: 0 }
+        Interp { prog, prof: Profiler::new(profile), effect_stack: Vec::new(), depth: 0, forks_left: 0, stops: Vec::new() }
+    }
+
+    fn stopped(&self) -> R<()> {
+        if self.stops.iter().any(|s| s.load(Ordering::Relaxed)) {
+            // Never seen: the failure of the other task wins.
+            return Err(RtError::new(ErrorKind::Internal, "a forked task was stopped"));
+        }
+        Ok(())
+    }
+
+    /// Evaluates `args`: those before `f.split` here, the rest in a task
+    /// that may run on another thread. Returns what evaluating them in order
+    /// returns: the first failure, and the profile of the work done up to it.
+    fn fork_args(&mut self, f: &Fork, args: &[Node], frame: &mut [Value]) -> R<Vec<Value>> {
+        let (mine, theirs) = args.split_at(f.split);
+        let mut their_frame = vec![UNSET; frame.len()];
+        for &(s, take) in &f.copy {
+            their_frame[s] = if take { std::mem::replace(&mut frame[s], UNSET) } else { frame[s].clone() };
+        }
+        let stop = Arc::new(AtomicBool::new(false));
+        let mut stops = self.stops.clone();
+        stops.push(stop.clone());
+        let mut task = Interp {
+            prog: self.prog,
+            prof: self.prof.fork(),
+            effect_stack: self.effect_stack.clone(),
+            depth: self.depth,
+            forks_left: self.forks_left - 1,
+            stops,
+        };
+        self.forks_left -= 1;
+        self.prof.forks += 1;
+        let (mine, theirs) = rayon::join(
+            || {
+                let r = self.eval_all(mine, frame);
+                if r.is_err() {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                r
+            },
+            || {
+                let r = task.eval_all(theirs, &mut their_frame);
+                (r, task.prof)
+            },
+        );
+        self.forks_left += 1;
+        // In order, a failure here means the task's arguments never ran.
+        let mut mine = mine?;
+        let (theirs, prof) = theirs;
+        self.prof.merge(prof);
+        mine.extend(theirs?);
+        Ok(mine)
     }
 
     pub fn call_main(&mut self) -> R<Value> {
@@ -174,6 +271,18 @@ impl<'p> Interp<'p> {
                 let args = self.eval_all(args, frame)?;
                 self.apply(&f, args)
             }
+            Node::Fork(f) if self.forks_left == 0 => self.eval(&f.call, frame),
+            Node::Fork(f) => match &f.call {
+                Node::CallGlobal(i, args) => {
+                    let args = self.fork_args(f, args, frame)?;
+                    self.call_fn(*i, args)
+                }
+                Node::CallBuiltin(b, args) => {
+                    let args = self.fork_args(f, args, frame)?;
+                    self.builtin(*b, args)
+                }
+                _ => self.eval(&f.call, frame),
+            },
             // Only `eval_tail` meets these; this is what one means.
             Node::ConsTail(..) => match self.eval_tail(n, frame)? {
                 Tail::Done(v) => Ok(v),
@@ -260,6 +369,7 @@ impl<'p> Interp<'p> {
         match f {
             Value::Func(i) => self.call_fn(*i, args),
             Value::Closure(c) => {
+                self.stopped()?;
                 if c.code.params.len() != args.len() {
                     return Err(RtError::new(ErrorKind::Arity, format!("fn expects {} args, got {}", c.code.params.len(), args.len())));
                 }
@@ -295,6 +405,9 @@ impl<'p> Interp<'p> {
         let mut heads = Vec::new();
         let mut args = args;
         let res = loop {
+            if let Err(e) = self.stopped() {
+                break Err((e, heads.len()));
+            }
             self.prof.enter(&def.name, self.depth);
             // ConsTail is compiled only for calls with the right arity.
             let mut frame = args;
