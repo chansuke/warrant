@@ -9,65 +9,14 @@
 use crate::builtin::Builtin;
 use crate::diag::ErrorKind;
 use crate::eval::RtError;
-use crate::ir::{Clause, Fn, Lambda, Node, Program};
+use crate::ir::{Clause, Fn, Node, Program};
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str};
-use crate::vector::{Copied, Vector};
+use crate::value::{Closure, Copied, Value, Vector};
 use std::sync::Arc;
 use std::time::Instant;
 
 const MAX_DEPTH: usize = 200_000;
-
-#[derive(Clone)]
-pub enum Value {
-    Int(i64),
-    Bool(bool),
-    Str(Arc<str>),
-    Vec(Vector),
-    Closure(Arc<Closure>),
-    Func(usize),
-    Builtin(Builtin),
-}
-
-pub struct Closure {
-    code: Arc<Lambda>,
-    captured: Vec<Value>,
-}
-
-impl Drop for Closure {
-    fn drop(&mut self) {
-        free_nested(&mut self.captured);
-    }
-}
-
-/// Drops `values` with a work list instead of recursion when they own
-/// vectors or closures, so freeing a deeply nested value (a vector of a
-/// vector of ..., or the buffers a ConsTail loop releases at once) never
-/// overflows the stack. Values another reference still holds are left alone.
-/// `Arc::into_inner` hands the contents to exactly one of the owners that
-/// let go, so this holds when owners on several threads drop at once.
-pub(crate) fn free_nested(values: &mut Vec<Value>) {
-    if !values.iter().any(|v| matches!(v, Value::Vec(_) | Value::Closure(_))) {
-        return;
-    }
-    let mut work = std::mem::take(values);
-    while let Some(v) = work.pop() {
-        match v {
-            Value::Vec(xs) => {
-                if let Some(mut elems) = xs.take_buf() {
-                    work.append(&mut elems);
-                }
-            }
-            Value::Closure(c) => {
-                if let Some(mut c) = Arc::into_inner(c) {
-                    work.append(&mut c.captured);
-                }
-            }
-            _ => {}
-        }
-        // Whatever is dropped here has nothing left inside it.
-    }
-}
 
 type R<T> = Result<T, RtError>;
 
