@@ -8,7 +8,7 @@ use std::time::Instant;
 use warrant::ast::{self, Module};
 use warrant::cache::Cache;
 use warrant::contracts::{self, Checks, ClauseLevels, Level, Mode};
-use warrant::diag::Diag;
+use warrant::diag::{Diag, ErrorKind};
 use warrant::ir::Program;
 use warrant::rt::Interp;
 use warrant::profile::{self, ms, RunInfo};
@@ -44,9 +44,14 @@ fn opt_value<'a>(opts: &'a [String], key: &str) -> Option<&'a str> {
     opts.iter().position(|o| o == key).and_then(|i| opts.get(i + 1)).map(|s| s.as_str())
 }
 
+/// Prints `(error :kind K :msg M)` and returns the exit code `K` stands for.
+fn error(kind: ErrorKind, msg: &str) -> i32 {
+    println!("(error :kind {} :msg {})", kind, quote_str(msg));
+    kind.exit_code()
+}
+
 fn usage_error(msg: &str) -> i32 {
-    println!("(error :kind usage :msg {})", quote_str(msg));
-    2
+    error(ErrorKind::Usage, msg)
 }
 
 /// A positive integer option, or its default.
@@ -67,10 +72,7 @@ struct Source {
 fn read_forms(path: &str) -> Result<Source, i32> {
     let src = match std::fs::read_to_string(path) {
         Ok(s) => s,
-        Err(e) => {
-            println!("(error :kind io :msg {})", quote_str(&e.to_string()));
-            return Err(2);
-        }
+        Err(e) => return Err(error(ErrorKind::Io, &e.to_string())),
     };
     let t = Instant::now();
     let r = if path.ends_with(".wisp") { wisp::parse_spanned(&src) } else { sexp::parse_all_spanned(&src) };
@@ -79,7 +81,7 @@ fn read_forms(path: &str) -> Result<Source, i32> {
         Ok((forms, spans)) => Ok(Source { forms, spans, parse_ns }),
         Err(e) => {
             println!("{}", e.to_sexp());
-            Err(2)
+            Err(ErrorKind::Parse.exit_code())
         }
     }
 }
@@ -87,7 +89,7 @@ fn read_forms(path: &str) -> Result<Source, i32> {
 fn load(src: &Source) -> Result<Module, i32> {
     ast::lower(&src.forms, &src.spans).map_err(|d| {
         println!("{}", d.to_sexp());
-        2
+        d.kind.exit_code()
     })
 }
 
@@ -173,11 +175,11 @@ fn prepare(m: &Module, opts: &[String]) -> Result<Prepared, i32> {
         }
         types_ns = Some(t.elapsed().as_nanos());
     }
-    if !errors.is_empty() {
+    if let Some(code) = errors.iter().map(|d| d.kind.exit_code()).max() {
         for d in errors {
             println!("{}", d.to_sexp());
         }
-        return Err(1);
+        return Err(code);
     }
     let (mut levels, mut extra) = (None, String::new());
     if mode == Mode::Auto {
@@ -282,7 +284,7 @@ fn run(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
         }
         Err(e) => {
             println!("{}", e.to_sexp());
-            1
+            e.kind.exit_code()
         }
     };
     if report {
@@ -308,7 +310,7 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
         let t = Instant::now();
         if let Err(e) = it.call_main() {
             println!("{}", e.to_sexp());
-            return 1;
+            return e.kind.exit_code();
         }
         if i > 0 {
             times.push(t.elapsed().as_nanos()); // run 0 is warm-up
@@ -362,12 +364,12 @@ fn spec_diff(old_path: &str, new_path: &str, opts: &[String]) -> i32 {
 fn real_main(args: Vec<String>) -> i32 {
     if args.len() < 3 {
         eprintln!("{}", USAGE);
-        return 2;
+        return ErrorKind::Usage.exit_code();
     }
     if args[1] == "spec-diff" {
         let Some(new_path) = args.get(3) else {
             eprintln!("{}", USAGE);
-            return 2;
+            return ErrorKind::Usage.exit_code();
         };
         return spec_diff(&args[2], new_path, &args[4..]);
     }
@@ -387,7 +389,7 @@ fn real_main(args: Vec<String>) -> i32 {
     }
     if !matches!(cmd, "run" | "check" | "bench") {
         eprintln!("{}", USAGE);
-        return 2;
+        return ErrorKind::Usage.exit_code();
     }
     let m = match load(&src) {
         Ok(m) => m,

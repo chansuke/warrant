@@ -6,7 +6,7 @@
 
 use crate::ast::{Expr, ExprId, ExprKind, FnDecl, Module, Type};
 use crate::builtin::Builtin;
-use crate::diag::Diag;
+use crate::diag::{Diag, ErrorKind};
 use crate::sexp::Pos;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,7 +170,7 @@ impl Infer<'_> {
     fn expect(&mut self, want: &Ty, got: &Ty, at: Pos, what: &str) -> Result<(), Diag> {
         self.unify(want, got).map_err(|()| {
             let (w, g) = (self.resolve(want).to_sexp(), self.resolve(got).to_sexp());
-            Diag::new("type", at, format!("{}: expected {}, got {}", what, w, g))
+            Diag::new(ErrorKind::Type, at, format!("{}: expected {}, got {}", what, w, g))
         })
     }
 
@@ -199,11 +199,11 @@ impl Infer<'_> {
             match dfr {
                 Deferred::VariadicValue { var, builtin, at } => {
                     let Ty::Fn(ps, r) = self.resolve(&var) else {
-                        return Err(Diag::new("type", at, format!("cannot infer how many arguments `{}` takes here", builtin.name())));
+                        return Err(Diag::new(ErrorKind::Type, at, format!("cannot infer how many arguments `{}` takes here", builtin.name())));
                     };
                     let Shape::Variadic { min, arg, ret } = self.shape(builtin) else { unreachable!("only variadics are deferred") };
                     if ps.len() < min {
-                        return Err(Diag::new("arity", at, format!("{} expects at least {} args, used here with {}", builtin.name(), min, ps.len())));
+                        return Err(Diag::new(ErrorKind::Arity, at, format!("{} expects at least {} args, used here with {}", builtin.name(), min, ps.len())));
                     }
                     for p in &ps {
                         if let Some(a) = &arg {
@@ -214,7 +214,7 @@ impl Infer<'_> {
                 }
                 Deferred::Comparable { ty, at } => {
                     if self.resolve(&ty).has_fn() {
-                        return Err(Diag::new("type", at, format!("= cannot compare functions ({})", self.resolve(&ty).to_sexp())));
+                        return Err(Diag::new(ErrorKind::Type, at, format!("= cannot compare functions ({})", self.resolve(&ty).to_sexp())));
                     }
                 }
             }
@@ -223,7 +223,7 @@ impl Infer<'_> {
             let t = self.resolve(&self.types[id]);
             if t.has_var() {
                 let at = self.expr_pos(id);
-                return Err(Diag::new("type", at, format!("cannot infer a type here (got {}); add an annotation", t.to_sexp())));
+                return Err(Diag::new(ErrorKind::Type, at, format!("cannot infer a type here (got {}); add an annotation", t.to_sexp())));
             }
         }
         Ok(())
@@ -351,7 +351,7 @@ impl Infer<'_> {
                 let ft = self.infer(f, env)?;
                 self.unify(&tt, &ft).map_err(|()| {
                     let (a, b) = (self.resolve(&tt).to_sexp(), self.resolve(&ft).to_sexp());
-                    Diag::new("type", e.at, format!("if branches differ: then is {}, else is {}", a, b))
+                    Diag::new(ErrorKind::Type, e.at, format!("if branches differ: then is {}, else is {}", a, b))
                 })?;
                 tt
             }
@@ -402,7 +402,7 @@ impl Infer<'_> {
         if let ExprKind::Builtin(b) = &f.kind {
             if let Shape::Variadic { min, arg, ret } = self.shape(*b) {
                 if args.len() < min {
-                    return Err(Diag::new("arity", call.at, format!("{} expects at least {} args, got {}", name, min, args.len())));
+                    return Err(Diag::new(ErrorKind::Arity, call.at, format!("{} expects at least {} args, got {}", name, min, args.len())));
                 }
                 let mut ats = Vec::new();
                 for a in args {
@@ -420,7 +420,7 @@ impl Infer<'_> {
         let ft = self.infer(f, env)?;
         if let Ty::Fn(ps, _) = self.resolve(&ft) {
             if ps.len() != args.len() {
-                return Err(Diag::new("arity", call.at, format!("{} expects {} args, got {}", name, ps.len(), args.len())));
+                return Err(Diag::new(ErrorKind::Arity, call.at, format!("{} expects {} args, got {}", name, ps.len(), args.len())));
             }
         }
         let mut ats = Vec::new();
@@ -457,7 +457,7 @@ mod tests {
     fn first_err(src: &str) -> (&'static str, usize, usize, String) {
         let d = check_src(src).err().expect("type error").remove(0);
         let at = d.at.unwrap();
-        (d.kind, at.line, at.col, d.msg)
+        (d.kind.as_str(), at.line, at.col, d.msg)
     }
 
     #[test]
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn unbound_symbols_are_rejected_before_typing() {
         let (f, s) = parse_all_spanned("(defn f [] -> i64 (+ 1 nope))").unwrap();
-        assert_eq!(lower(&f, &s).unwrap_err().kind, "unbound");
+        assert_eq!(lower(&f, &s).unwrap_err().kind, ErrorKind::Unbound);
     }
 
     #[test]

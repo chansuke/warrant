@@ -2,15 +2,83 @@
 
 use crate::sexp::{quote_str, Pos};
 
+/// What went wrong, as `:kind` prints it. Each kind decides the exit code, so
+/// a new failure picks its class here and `main` never chooses a number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    // The input could not be taken: exit 2.
+    Parse,
+    Syntax,
+    Load,
+    Io,
+    Usage,
+    // The program is wrong or failed while running: exit 1.
+    Type,
+    Effect,
+    Contract,
+    Overflow,
+    DivZero,
+    Bounds,
+    Arity,
+    Unbound,
+    Stack,
+    Alloc,
+}
+
+impl ErrorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ErrorKind::Parse => "parse",
+            ErrorKind::Syntax => "syntax",
+            ErrorKind::Load => "load",
+            ErrorKind::Io => "io",
+            ErrorKind::Usage => "usage",
+            ErrorKind::Type => "type",
+            ErrorKind::Effect => "effect",
+            ErrorKind::Contract => "contract",
+            ErrorKind::Overflow => "overflow",
+            ErrorKind::DivZero => "div-zero",
+            ErrorKind::Bounds => "bounds",
+            ErrorKind::Arity => "arity",
+            ErrorKind::Unbound => "unbound",
+            ErrorKind::Stack => "stack",
+            ErrorKind::Alloc => "alloc",
+        }
+    }
+
+    /// 1 for a failure of the program, 2 for input the tool could not take.
+    pub fn exit_code(self) -> i32 {
+        match self {
+            ErrorKind::Parse | ErrorKind::Syntax | ErrorKind::Load | ErrorKind::Io | ErrorKind::Usage => 2,
+            ErrorKind::Type
+            | ErrorKind::Effect
+            | ErrorKind::Contract
+            | ErrorKind::Overflow
+            | ErrorKind::DivZero
+            | ErrorKind::Bounds
+            | ErrorKind::Arity
+            | ErrorKind::Unbound
+            | ErrorKind::Stack
+            | ErrorKind::Alloc => 1,
+        }
+    }
+}
+
+impl std::fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Diag {
-    pub kind: &'static str,
+    pub kind: ErrorKind,
     pub at: Option<Pos>,
     pub msg: String,
 }
 
 impl Diag {
-    pub fn new(kind: &'static str, at: Pos, msg: impl Into<String>) -> Self {
+    pub fn new(kind: ErrorKind, at: Pos, msg: impl Into<String>) -> Self {
         Diag { kind, at: Some(at), msg: msg.into() }
     }
 

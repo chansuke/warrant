@@ -10,6 +10,7 @@
 
 use crate::ast::{Budget, Clause, Module};
 use crate::contracts::Checks;
+use crate::diag::ErrorKind;
 use crate::builtin::Builtin;
 use crate::profile::Profiler;
 use crate::sexp::{flat, quote_str, Sexp};
@@ -75,13 +76,13 @@ pub struct FnDef {
 
 #[derive(Debug)]
 pub struct RtError {
-    pub kind: &'static str,
+    pub kind: ErrorKind,
     pub msg: String,
     pub trace: Vec<String>,
 }
 
 impl RtError {
-    pub fn new(kind: &'static str, msg: impl Into<String>) -> Self {
+    pub fn new(kind: ErrorKind, msg: impl Into<String>) -> Self {
         RtError { kind, msg: msg.into(), trace: Vec::new() }
     }
     pub fn to_sexp(&self) -> String {
@@ -112,12 +113,12 @@ pub fn parse_params(v: &[Sexp]) -> R<Vec<String>> {
                 i += 1;
                 if v.get(i) == Some(&Sexp::Sym(":".into())) {
                     if v.get(i + 1).is_none() {
-                        return Err(RtError::new("syntax", format!("parameter `{}` has `:` but no type", s)));
+                        return Err(RtError::new(ErrorKind::Syntax, format!("parameter `{}` has `:` but no type", s)));
                     }
                     i += 2;
                 }
             }
-            other => return Err(RtError::new("syntax", format!("bad parameter `{}`", flat(other)))),
+            other => return Err(RtError::new(ErrorKind::Syntax, format!("bad parameter `{}`", flat(other)))),
         }
     }
     Ok(out)
@@ -182,20 +183,20 @@ fn values_eq(a: &Value, b: &Value) -> bool {
 fn int(v: &Value, op: &str) -> R<i64> {
     match v {
         Value::Int(n) => Ok(*n),
-        o => Err(RtError::new("type", format!("({} ...) expects i64, got {}", op, type_name(o)))),
+        o => Err(RtError::new(ErrorKind::Type, format!("({} ...) expects i64, got {}", op, type_name(o)))),
     }
 }
 
 fn vecv(v: &Value, op: &str) -> R<Rc<Vec<Value>>> {
     match v {
         Value::Vec(x) => Ok(x.clone()),
-        o => Err(RtError::new("type", format!("({} ...) expects vec, got {}", op, type_name(o)))),
+        o => Err(RtError::new(ErrorKind::Type, format!("({} ...) expects vec, got {}", op, type_name(o)))),
     }
 }
 
 fn arity(op: &str, args: &[Value], n: usize) -> R<()> {
     if args.len() != n {
-        return Err(RtError::new("arity", format!("{} expects {} args, got {}", op, n, args.len())));
+        return Err(RtError::new(ErrorKind::Arity, format!("{} expects {} args, got {}", op, n, args.len())));
     }
     Ok(())
 }
@@ -214,7 +215,7 @@ impl<'p> Interp<'p> {
 
     pub fn call_main(&mut self) -> R<Value> {
         let Some(m) = self.prog.fns.get("main") else {
-            return Err(RtError::new("load", "no (defn main [] ...) found"));
+            return Err(RtError::new(ErrorKind::Load, "no (defn main [] ...) found"));
         };
         self.call_fn(m.clone(), Vec::new())
     }
@@ -229,7 +230,7 @@ impl<'p> Interp<'p> {
         if let Some(b) = Builtin::from_name(s) {
             return Ok(Value::Builtin(b));
         }
-        Err(RtError::new("unbound", format!("unbound symbol `{}`", s)))
+        Err(RtError::new(ErrorKind::Unbound, format!("unbound symbol `{}`", s)))
     }
 
     pub fn eval(&mut self, e: &Sexp, env: &Env) -> R<Value> {
@@ -237,7 +238,7 @@ impl<'p> Interp<'p> {
             Sexp::Int(n) => Ok(Value::Int(*n)),
             Sexp::Bool(b) => Ok(Value::Bool(*b)),
             Sexp::Str(s) => Ok(Value::Str(s.as_str().into())),
-            Sexp::Kw(k) => Err(RtError::new("syntax", format!(":{} is not an expression", k))),
+            Sexp::Kw(k) => Err(RtError::new(ErrorKind::Syntax, format!(":{} is not an expression", k))),
             Sexp::Sym(s) => self.lookup(s, env),
             Sexp::Vector(items) => {
                 let mut v = Vec::with_capacity(items.len());
@@ -249,31 +250,31 @@ impl<'p> Interp<'p> {
             }
             Sexp::List(items) => {
                 let Some(head) = items.first() else {
-                    return Err(RtError::new("syntax", "() is not an expression"));
+                    return Err(RtError::new(ErrorKind::Syntax, "() is not an expression"));
                 };
                 if let Sexp::Sym(h) = head {
                     match h.as_str() {
                         "if" => {
                             if items.len() != 4 {
-                                return Err(RtError::new("syntax", "(if cond then else)"));
+                                return Err(RtError::new(ErrorKind::Syntax, "(if cond then else)"));
                             }
                             return match self.eval(&items[1], env)? {
                                 Value::Bool(true) => self.eval(&items[2], env),
                                 Value::Bool(false) => self.eval(&items[3], env),
-                                o => Err(RtError::new("type", format!("if condition must be bool, got {}", type_name(&o)))),
+                                o => Err(RtError::new(ErrorKind::Type, format!("if condition must be bool, got {}", type_name(&o)))),
                             };
                         }
                         "let" => {
                             let Some(Sexp::Vector(bs)) = items.get(1) else {
-                                return Err(RtError::new("syntax", "(let [name expr ...] body ...)"));
+                                return Err(RtError::new(ErrorKind::Syntax, "(let [name expr ...] body ...)"));
                             };
                             if bs.len() % 2 != 0 {
-                                return Err(RtError::new("syntax", "let bindings must come in pairs"));
+                                return Err(RtError::new(ErrorKind::Syntax, "let bindings must come in pairs"));
                             }
                             let mut env2 = env.clone();
                             for pair in bs.chunks(2) {
                                 let Sexp::Sym(n) = &pair[0] else {
-                                    return Err(RtError::new("syntax", "let binding name must be a symbol"));
+                                    return Err(RtError::new(ErrorKind::Syntax, "let binding name must be a symbol"));
                                 };
                                 let v = self.eval(&pair[1], &env2)?;
                                 env2 = env2.bind(n.clone(), v);
@@ -282,10 +283,10 @@ impl<'p> Interp<'p> {
                         }
                         "fn" => {
                             let Some(Sexp::Vector(ps)) = items.get(1) else {
-                                return Err(RtError::new("syntax", "(fn [params] body ...)"));
+                                return Err(RtError::new(ErrorKind::Syntax, "(fn [params] body ...)"));
                             };
                             if items.len() < 3 {
-                                return Err(RtError::new("syntax", "fn has no body"));
+                                return Err(RtError::new(ErrorKind::Syntax, "fn has no body"));
                             }
                             return Ok(Value::Closure(Rc::new(Closure {
                                 params: parse_params(ps)?,
@@ -300,12 +301,12 @@ impl<'p> Interp<'p> {
                                 match self.eval(x, env)? {
                                     Value::Bool(b) if b == want => return Ok(Value::Bool(want)),
                                     Value::Bool(_) => {}
-                                    o => return Err(RtError::new("type", format!("{} expects bool, got {}", h, type_name(&o)))),
+                                    o => return Err(RtError::new(ErrorKind::Type, format!("{} expects bool, got {}", h, type_name(&o)))),
                                 }
                             }
                             return Ok(Value::Bool(!want));
                         }
-                        "defn" => return Err(RtError::new("syntax", "defn is only allowed at top level")),
+                        "defn" => return Err(RtError::new(ErrorKind::Syntax, "defn is only allowed at top level")),
                         _ => {}
                     }
                 }
@@ -324,7 +325,7 @@ impl<'p> Interp<'p> {
         for e in es {
             last = Some(self.eval(e, env)?);
         }
-        last.ok_or_else(|| RtError::new("syntax", "empty body"))
+        last.ok_or_else(|| RtError::new(ErrorKind::Syntax, "empty body"))
     }
 
     pub fn apply(&mut self, f: &Value, args: Vec<Value>) -> R<Value> {
@@ -332,7 +333,7 @@ impl<'p> Interp<'p> {
             Value::Func(def) => self.call_fn(def.clone(), args),
             Value::Closure(c) => {
                 if c.params.len() != args.len() {
-                    return Err(RtError::new("arity", format!("fn expects {} args, got {}", c.params.len(), args.len())));
+                    return Err(RtError::new(ErrorKind::Arity, format!("fn expects {} args, got {}", c.params.len(), args.len())));
                 }
                 self.prof.closure_calls += 1;
                 let mut env = c.env.clone();
@@ -343,14 +344,14 @@ impl<'p> Interp<'p> {
                 self.eval_seq(&body, &env)
             }
             Value::Builtin(b) => self.builtin(*b, args),
-            o => Err(RtError::new("type", format!("cannot call a value of type {}", type_name(o)))),
+            o => Err(RtError::new(ErrorKind::Type, format!("cannot call a value of type {}", type_name(o)))),
         }
     }
 
     fn call_fn(&mut self, def: Rc<FnDef>, args: Vec<Value>) -> R<Value> {
         if args.len() != def.params.len() {
             return Err(RtError::new(
-                "arity",
+                ErrorKind::Arity,
                 format!("{} expects {} args, got {}", def.name, def.params.len(), args.len()),
             ));
         }
@@ -359,7 +360,7 @@ impl<'p> Interp<'p> {
             env = env.bind(p.clone(), a);
         }
         if self.depth >= MAX_DEPTH {
-            return Err(RtError::new("stack", format!("call depth exceeded {}", MAX_DEPTH)));
+            return Err(RtError::new(ErrorKind::Stack, format!("call depth exceeded {}", MAX_DEPTH)));
         }
         self.depth += 1;
         self.prof.enter(&def.name, self.depth);
@@ -403,8 +404,8 @@ impl<'p> Interp<'p> {
         }
         match r? {
             Value::Bool(true) => Ok(()),
-            Value::Bool(false) => Err(RtError::new("contract", format!("{} failed in {}: {}", which, def.name, flat(e)))),
-            o => Err(RtError::new("type", format!("contract must be bool, got {}", type_name(&o)))),
+            Value::Bool(false) => Err(RtError::new(ErrorKind::Contract, format!("{} failed in {}: {}", which, def.name, flat(e)))),
+            o => Err(RtError::new(ErrorKind::Type, format!("contract must be bool, got {}", type_name(&o)))),
         }
     }
 
@@ -413,7 +414,7 @@ impl<'p> Interp<'p> {
             if let Some(es) = &d.effects {
                 if !es.iter().any(|e| e == eff) {
                     return Err(RtError::new(
-                        "effect",
+                        ErrorKind::Effect,
                         format!("`{}` performs effect {}, but `{}` declares (:effects [{}])", op, eff, d.name, es.join(" ")),
                     ));
                 }
@@ -426,7 +427,7 @@ impl<'p> Interp<'p> {
         use Builtin as B;
         self.prof.builtin(b);
         let name = b.name();
-        let ovf = || RtError::new("overflow", format!("i64 overflow in ({} ...)", name));
+        let ovf = || RtError::new(ErrorKind::Overflow, format!("i64 overflow in ({} ...)", name));
         match b {
             B::Add | B::Mul => {
                 let mut acc: i64 = if b == B::Add { 0 } else { 1 };
@@ -438,7 +439,7 @@ impl<'p> Interp<'p> {
             }
             B::Sub => {
                 let Some(first) = args.first() else {
-                    return Err(RtError::new("arity", "- expects at least 1 arg"));
+                    return Err(RtError::new(ErrorKind::Arity, "- expects at least 1 arg"));
                 };
                 let mut acc = int(first, name)?;
                 if args.len() == 1 {
@@ -453,7 +454,7 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 2)?;
                 let (x, y) = (int(&args[0], name)?, int(&args[1], name)?);
                 if y == 0 {
-                    return Err(RtError::new("div-zero", format!("({} {} 0)", name, x)));
+                    return Err(RtError::new(ErrorKind::DivZero, format!("({} {} 0)", name, x)));
                 }
                 if b == B::Div { x.checked_div(y) } else { x.checked_rem_euclid(y) }
                     .map(Value::Int)
@@ -477,7 +478,7 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 1)?;
                 match &args[0] {
                     Value::Bool(x) => Ok(Value::Bool(!x)),
-                    o => Err(RtError::new("type", format!("not expects bool, got {}", type_name(o)))),
+                    o => Err(RtError::new(ErrorKind::Type, format!("not expects bool, got {}", type_name(o)))),
                 }
             }
             B::Len => {
@@ -492,7 +493,7 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 2)?;
                 let (v, i) = (vecv(&args[0], name)?, int(&args[1], name)?);
                 if i < 0 || i as usize >= v.len() {
-                    return Err(RtError::new("bounds", format!("(get v {}) on vec of len {}", i, v.len())));
+                    return Err(RtError::new(ErrorKind::Bounds, format!("(get v {}) on vec of len {}", i, v.len())));
                 }
                 Ok(v[i as usize].clone())
             }
@@ -501,7 +502,7 @@ impl<'p> Interp<'p> {
                 let v = vecv(&args[0], name)?;
                 let (lo, hi) = (int(&args[1], name)?, int(&args[2], name)?);
                 if lo < 0 || hi < lo || hi as usize > v.len() {
-                    return Err(RtError::new("bounds", format!("(slice v {} {}) on vec of len {}", lo, hi, v.len())));
+                    return Err(RtError::new(ErrorKind::Bounds, format!("(slice v {} {}) on vec of len {}", lo, hi, v.len())));
                 }
                 let out = v[lo as usize..hi as usize].to_vec();
                 self.prof.vec_alloc(out.len());
@@ -511,7 +512,7 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 1)?;
                 let v = vecv(&args[0], name)?;
                 if v.is_empty() {
-                    return Err(RtError::new("bounds", "(rest []) on empty vec"));
+                    return Err(RtError::new(ErrorKind::Bounds, "(rest []) on empty vec"));
                 }
                 let out = v[1..].to_vec();
                 self.prof.vec_alloc(out.len());
@@ -539,11 +540,11 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 1)?;
                 let n = int(&args[0], name)?;
                 if n < 0 {
-                    return Err(RtError::new("bounds", format!("(range {}) needs n >= 0", n)));
+                    return Err(RtError::new(ErrorKind::Bounds, format!("(range {}) needs n >= 0", n)));
                 }
                 let mut out: Vec<Value> = Vec::new();
                 if out.try_reserve_exact(n as usize).is_err() {
-                    return Err(RtError::new("alloc", format!("(range {}) needs more memory than can be allocated", n)));
+                    return Err(RtError::new(ErrorKind::Alloc, format!("(range {}) needs more memory than can be allocated", n)));
                 }
                 out.extend((0..n).map(Value::Int));
                 self.prof.vec_alloc(out.len());
@@ -566,7 +567,7 @@ impl<'p> Interp<'p> {
                         match r {
                             Value::Bool(true) => out.push(x.clone()),
                             Value::Bool(false) => {}
-                            o => return Err(RtError::new("type", format!("filter predicate must return bool, got {}", type_name(&o)))),
+                            o => return Err(RtError::new(ErrorKind::Type, format!("filter predicate must return bool, got {}", type_name(&o)))),
                         }
                     }
                 }
@@ -580,7 +581,7 @@ impl<'p> Interp<'p> {
                     match self.apply(&args[0], vec![x.clone()])? {
                         Value::Bool(true) => {}
                         Value::Bool(false) => return Ok(Value::Bool(false)),
-                        o => return Err(RtError::new("type", format!("all? predicate must return bool, got {}", type_name(&o)))),
+                        o => return Err(RtError::new(ErrorKind::Type, format!("all? predicate must return bool, got {}", type_name(&o)))),
                     }
                 }
                 Ok(Value::Bool(true))

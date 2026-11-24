@@ -7,6 +7,7 @@
 //! stack declares effects without `io`. Integer arithmetic is checked.
 
 use crate::builtin::Builtin;
+use crate::diag::ErrorKind;
 use crate::eval::RtError;
 use crate::ir::{Clause, Fn, Lambda, Node, Program};
 use crate::profile::Profiler;
@@ -121,14 +122,14 @@ fn values_eq(a: &Value, b: &Value) -> bool {
 fn int(v: &Value, op: &str) -> R<i64> {
     match v {
         Value::Int(n) => Ok(*n),
-        o => Err(RtError::new("type", format!("({} ...) expects i64, got {}", op, type_name(o)))),
+        o => Err(RtError::new(ErrorKind::Type, format!("({} ...) expects i64, got {}", op, type_name(o)))),
     }
 }
 
 fn vector<'v>(v: &'v Value, op: &str) -> R<&'v Vector> {
     match v {
         Value::Vec(x) => Ok(x),
-        o => Err(RtError::new("type", format!("({} ...) expects vec, got {}", op, type_name(o)))),
+        o => Err(RtError::new(ErrorKind::Type, format!("({} ...) expects vec, got {}", op, type_name(o)))),
     }
 }
 
@@ -141,13 +142,13 @@ fn vecv<'v>(v: &'v Value, op: &str) -> R<&'v [Value]> {
 fn take_vec(v: &mut Value, op: &str) -> R<Vector> {
     match std::mem::replace(v, Value::Bool(false)) {
         Value::Vec(x) => Ok(x),
-        o => Err(RtError::new("type", format!("({} ...) expects vec, got {}", op, type_name(&o)))),
+        o => Err(RtError::new(ErrorKind::Type, format!("({} ...) expects vec, got {}", op, type_name(&o)))),
     }
 }
 
 fn arity(op: &str, args: &[Value], n: usize) -> R<()> {
     if args.len() != n {
-        return Err(RtError::new("arity", format!("{} expects {} args, got {}", op, n, args.len())));
+        return Err(RtError::new(ErrorKind::Arity, format!("{} expects {} args, got {}", op, n, args.len())));
     }
     Ok(())
 }
@@ -167,7 +168,7 @@ impl<'p> Interp<'p> {
 
     pub fn call_main(&mut self) -> R<Value> {
         let Some(&m) = self.prog.index.get("main") else {
-            return Err(RtError::new("load", "no (defn main [] ...) found"));
+            return Err(RtError::new(ErrorKind::Load, "no (defn main [] ...) found"));
         };
         self.call_fn(m, Vec::new())
     }
@@ -234,7 +235,7 @@ impl<'p> Interp<'p> {
     fn cond(&mut self, c: &Node, frame: &mut [Value]) -> R<bool> {
         match self.eval(c, frame)? {
             Value::Bool(b) => Ok(b),
-            o => Err(RtError::new("type", format!("if condition must be bool, got {}", type_name(&o)))),
+            o => Err(RtError::new(ErrorKind::Type, format!("if condition must be bool, got {}", type_name(&o)))),
         }
     }
 
@@ -298,7 +299,7 @@ impl<'p> Interp<'p> {
                 Value::Bool(_) => {}
                 o => {
                     let h = if want { "or" } else { "and" };
-                    return Err(RtError::new("type", format!("{} expects bool, got {}", h, type_name(&o))));
+                    return Err(RtError::new(ErrorKind::Type, format!("{} expects bool, got {}", h, type_name(&o))));
                 }
             }
         }
@@ -310,7 +311,7 @@ impl<'p> Interp<'p> {
             Value::Func(i) => self.call_fn(*i, args),
             Value::Closure(c) => {
                 if c.code.params.len() != args.len() {
-                    return Err(RtError::new("arity", format!("fn expects {} args, got {}", c.code.params.len(), args.len())));
+                    return Err(RtError::new(ErrorKind::Arity, format!("fn expects {} args, got {}", c.code.params.len(), args.len())));
                 }
                 self.prof.closure_calls += 1;
                 let mut frame = vec![UNSET; c.code.frame];
@@ -323,7 +324,7 @@ impl<'p> Interp<'p> {
                 self.eval_seq(&c.code.body, &mut frame)
             }
             Value::Builtin(b) => self.builtin(*b, args),
-            o => Err(RtError::new("type", format!("cannot call a value of type {}", type_name(o)))),
+            o => Err(RtError::new(ErrorKind::Type, format!("cannot call a value of type {}", type_name(o)))),
         }
     }
 
@@ -334,10 +335,10 @@ impl<'p> Interp<'p> {
     fn call_fn(&mut self, i: usize, args: Vec<Value>) -> R<Value> {
         let def = &self.prog.fns[i];
         if args.len() != def.params {
-            return Err(RtError::new("arity", format!("{} expects {} args, got {}", def.name, def.params, args.len())));
+            return Err(RtError::new(ErrorKind::Arity, format!("{} expects {} args, got {}", def.name, def.params, args.len())));
         }
         if self.depth >= MAX_DEPTH {
-            return Err(RtError::new("stack", format!("call depth exceeded {}", MAX_DEPTH)));
+            return Err(RtError::new(ErrorKind::Stack, format!("call depth exceeded {}", MAX_DEPTH)));
         }
         self.depth += 1;
         self.effect_stack.push(i);
@@ -426,8 +427,8 @@ impl<'p> Interp<'p> {
         }
         match r? {
             Value::Bool(true) => Ok(()),
-            Value::Bool(false) => Err(RtError::new("contract", format!("{} failed in {}: {}", which, def.name, flat(&c.src)))),
-            o => Err(RtError::new("type", format!("contract must be bool, got {}", type_name(&o)))),
+            Value::Bool(false) => Err(RtError::new(ErrorKind::Contract, format!("{} failed in {}: {}", which, def.name, flat(&c.src)))),
+            o => Err(RtError::new(ErrorKind::Type, format!("contract must be bool, got {}", type_name(&o)))),
         }
     }
 
@@ -445,7 +446,7 @@ impl<'p> Interp<'p> {
             if let Some(es) = &d.effects {
                 if !es.iter().any(|e| e == eff) {
                     return Err(RtError::new(
-                        "effect",
+                        ErrorKind::Effect,
                         format!("`{}` performs effect {}, but `{}` declares (:effects [{}])", op, eff, d.name, es.join(" ")),
                     ));
                 }
@@ -458,7 +459,7 @@ impl<'p> Interp<'p> {
         use Builtin as B;
         self.prof.builtin(b);
         let name = b.name();
-        let ovf = || RtError::new("overflow", format!("i64 overflow in ({} ...)", name));
+        let ovf = || RtError::new(ErrorKind::Overflow, format!("i64 overflow in ({} ...)", name));
         match b {
             B::Add | B::Mul => {
                 let mut acc: i64 = if b == B::Add { 0 } else { 1 };
@@ -470,7 +471,7 @@ impl<'p> Interp<'p> {
             }
             B::Sub => {
                 let Some(first) = args.first() else {
-                    return Err(RtError::new("arity", "- expects at least 1 arg"));
+                    return Err(RtError::new(ErrorKind::Arity, "- expects at least 1 arg"));
                 };
                 let mut acc = int(first, name)?;
                 if args.len() == 1 {
@@ -485,7 +486,7 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 2)?;
                 let (x, y) = (int(&args[0], name)?, int(&args[1], name)?);
                 if y == 0 {
-                    return Err(RtError::new("div-zero", format!("({} {} 0)", name, x)));
+                    return Err(RtError::new(ErrorKind::DivZero, format!("({} {} 0)", name, x)));
                 }
                 if b == B::Div { x.checked_div(y) } else { x.checked_rem_euclid(y) }
                     .map(Value::Int)
@@ -509,7 +510,7 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 1)?;
                 match &args[0] {
                     Value::Bool(x) => Ok(Value::Bool(!x)),
-                    o => Err(RtError::new("type", format!("not expects bool, got {}", type_name(o)))),
+                    o => Err(RtError::new(ErrorKind::Type, format!("not expects bool, got {}", type_name(o)))),
                 }
             }
             B::Len => {
@@ -524,7 +525,7 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 2)?;
                 let (v, i) = (vecv(&args[0], name)?, int(&args[1], name)?);
                 if i < 0 || i as usize >= v.len() {
-                    return Err(RtError::new("bounds", format!("(get v {}) on vec of len {}", i, v.len())));
+                    return Err(RtError::new(ErrorKind::Bounds, format!("(get v {}) on vec of len {}", i, v.len())));
                 }
                 Ok(v[i as usize].clone())
             }
@@ -534,7 +535,7 @@ impl<'p> Interp<'p> {
                 let v = take_vec(&mut args[0], name)?;
                 let (lo, hi) = (int(&args[1], name)?, int(&args[2], name)?);
                 if lo < 0 || hi < lo || hi as usize > v.len() {
-                    return Err(RtError::new("bounds", format!("(slice v {} {}) on vec of len {}", lo, hi, v.len())));
+                    return Err(RtError::new(ErrorKind::Bounds, format!("(slice v {} {}) on vec of len {}", lo, hi, v.len())));
                 }
                 let (v, copied) = v.slice(lo as usize, hi as usize);
                 self.copied(copied);
@@ -545,7 +546,7 @@ impl<'p> Interp<'p> {
                 let mut args = args;
                 let v = take_vec(&mut args[0], name)?;
                 if v.is_empty() {
-                    return Err(RtError::new("bounds", "(rest []) on empty vec"));
+                    return Err(RtError::new(ErrorKind::Bounds, "(rest []) on empty vec"));
                 }
                 let (v, copied) = v.rest();
                 self.copied(copied);
@@ -572,11 +573,11 @@ impl<'p> Interp<'p> {
                 arity(name, &args, 1)?;
                 let n = int(&args[0], name)?;
                 if n < 0 {
-                    return Err(RtError::new("bounds", format!("(range {}) needs n >= 0", n)));
+                    return Err(RtError::new(ErrorKind::Bounds, format!("(range {}) needs n >= 0", n)));
                 }
                 let mut out: Vec<Value> = Vec::new();
                 if out.try_reserve_exact(n as usize).is_err() {
-                    return Err(RtError::new("alloc", format!("(range {}) needs more memory than can be allocated", n)));
+                    return Err(RtError::new(ErrorKind::Alloc, format!("(range {}) needs more memory than can be allocated", n)));
                 }
                 out.extend((0..n).map(Value::Int));
                 self.prof.vec_alloc(out.len());
@@ -599,7 +600,7 @@ impl<'p> Interp<'p> {
                         match r {
                             Value::Bool(true) => out.push(x.clone()),
                             Value::Bool(false) => {}
-                            o => return Err(RtError::new("type", format!("filter predicate must return bool, got {}", type_name(&o)))),
+                            o => return Err(RtError::new(ErrorKind::Type, format!("filter predicate must return bool, got {}", type_name(&o)))),
                         }
                     }
                 }
@@ -613,7 +614,7 @@ impl<'p> Interp<'p> {
                     match self.apply(&args[0], vec![x.clone()])? {
                         Value::Bool(true) => {}
                         Value::Bool(false) => return Ok(Value::Bool(false)),
-                        o => return Err(RtError::new("type", format!("all? predicate must return bool, got {}", type_name(&o)))),
+                        o => return Err(RtError::new(ErrorKind::Type, format!("all? predicate must return bool, got {}", type_name(&o)))),
                     }
                 }
                 Ok(Value::Bool(true))
