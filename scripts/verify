@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# One command to check a change. Prints one line per step and keeps the
+# full logs and summary.md under target/verify/.
+#
+#   scripts/verify [--base REV]          clippy, tests, and the
+#                                        docs/verification.md items the
+#                                        change triggers
+#   scripts/verify formal                TLC on formal/tla, Lean on formal/lean
+#   scripts/verify bench [--base REV]    msort against REV, interleaved;
+#                                        fails on a slowdown over 15%
+#   scripts/verify full [--base REV]     all of the above
+#
+# REV defaults to origin/main. Outside CI it runs inside `nix develop`, which
+# has the Rust, z3, JDK and elan that CI pins.
+set -euo pipefail
+
+root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
+if [ -z "${IN_NIX_SHELL:-}" ] && [ -z "${CI:-}" ]; then
+  exec nix develop "$root" --command "$0" "$@"
+fi
+cd "$root"
+
+mode=check
+base=origin/main
+while (($# > 0)); do
+  case $1 in
+  check | formal | bench | full) mode=$1 ;;
+  --base)
+    base=${2:?--base needs a revision}
+    shift
+    ;;
+  *)
+    sed -n '2,/^set /p' "$0" | sed '$d; s/^# \{0,1\}//' >&2
+    exit 2
+    ;;
+  esac
+  shift
+done
+has_base() { git rev-parse --verify --quiet "$base^{commit}" >/dev/null; }
+has_base || base=main
+
+out=$root/target/verify
+logs=$out/logs
+rm -rf "$logs"
+mkdir -p "$logs"
+summary=$out/summary.md
+failed=0
+rows=()
+notes=()
+
+# step NAME COMMAND...: runs COMMAND with its output in logs/NAME.log.
+step() {
+  local name=$1 log=$logs/$1.log started status=0
+  shift
+  started=$(date +%s)
+  "$@" >"$log" 2>&1 || status=$?
+  local took=$(($(date +%s) - started))s
+  if ((status == 0)); then
+    printf 'pass  %-10s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
+    rows+=("| $name | pass | $took | \`${log#"$root"/}\` |")
+  else
+    printf 'FAIL  %-10s %5s  %s\n' "$name" "$took" "${log#"$root"/}"
+    rows+=("| $name | **fail** | $took | \`${log#"$root"/}\` |")
+    tail -n 30 "$log" | sed 's/^/      /'
+    failed=1
+  fi
+}
+
+if [ "$mode" = check ] || [ "$mode" = full ]; then
+  if ! command -v z3 >/dev/null; then
+    notes+=("z3 is not on PATH, so the tests that need it returned early: soundness, proofs in check, and spec-diff refinement were NOT checked. Run inside \`nix develop\`.")
+  fi
+  step clippy cargo clippy --release --locked --all-targets -- -D warnings
+  step test cargo test --release --locked
+  if has_base; then
+    scripts/verification-checklist.sh "$base" >"$out/checklist.md"
+  else
+    notes+=("There is no $base in this clone, so the docs/verification.md items were not matched. Pass \`--base REV\`.")
+    : >"$out/checklist.md"
+  fi
+fi
+if [ "$mode" = formal ] || [ "$mode" = full ]; then
+  step tla formal/tla/check.sh
+  step lean formal/lean/check.sh
+fi
+if [ "$mode" = bench ] || [ "$mode" = full ]; then
+  step bench scripts/bench-compare.sh "$base" examples/msort.wrt 5 15
+fi
+
+{
+  echo "# Verification"
+  echo
+  echo "Revision $(git rev-parse --short HEAD), compared with $base; mode \`$mode\`."
+  if ! git diff --quiet HEAD --; then
+    echo "The working tree has changes that are not committed."
+  fi
+  echo
+  echo "| Step | Result | Time | Log |"
+  echo "|---|---|---|---|"
+  printf '%s\n' "${rows[@]}"
+  for note in "${notes[@]}"; do
+    echo
+    echo "$note"
+  done
+  if [ -s "$out/checklist.md" ] && { [ "$mode" = check ] || [ "$mode" = full ]; }; then
+    echo
+    echo "## Checklist items this change triggers"
+    echo
+    echo "Each one needs a check of its own; see docs/verification.md."
+    echo
+    cat "$out/checklist.md"
+  fi
+  case $mode in
+  check) echo; echo "Not run in this mode: TLC and Lean (\`scripts/verify formal\`), the bench comparison (\`scripts/verify bench\`)." ;;
+  formal) echo; echo "Not run in this mode: clippy, tests, the bench comparison." ;;
+  bench) echo; echo "Not run in this mode: clippy, tests, TLC and Lean." ;;
+  esac
+} >"$summary"
+
+echo "summary: ${summary#"$root"/}"
+exit "$failed"
