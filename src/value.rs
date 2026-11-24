@@ -1,4 +1,5 @@
-//! Vectors for the IR runtime (M2-2): a shared buffer and a window into it.
+//! Values of the IR runtime, and its vectors (M2-2): a shared buffer and a
+//! window into it.
 //! `rest` and `slice` narrow the window without copying. `cons` and
 //! `concat` write into the buffer in place when no other value refers to it
 //! (`Arc::get_mut`), so a value never changes once another can see it.
@@ -6,9 +7,61 @@
 //! A window that shrinks below a quarter of its buffer is copied out, so a
 //! small slice does not keep a large buffer alive.
 
-use crate::rt::Value;
+use crate::builtin::Builtin;
+use crate::ir::Lambda;
 use std::mem::ManuallyDrop;
 use std::sync::Arc;
+
+#[derive(Clone)]
+pub enum Value {
+    Int(i64),
+    Bool(bool),
+    Str(Arc<str>),
+    Vec(Vector),
+    Closure(Arc<Closure>),
+    Func(usize),
+    Builtin(Builtin),
+}
+
+pub struct Closure {
+    pub(crate) code: Arc<Lambda>,
+    pub(crate) captured: Vec<Value>,
+}
+
+impl Drop for Closure {
+    fn drop(&mut self) {
+        free_nested(&mut self.captured);
+    }
+}
+
+/// Drops `values` with a work list instead of recursion when they own
+/// vectors or closures, so freeing a deeply nested value (a vector of a
+/// vector of ..., or the buffers a ConsTail loop releases at once) never
+/// overflows the stack. Values another reference still holds are left alone.
+/// `Arc::into_inner` hands the contents to exactly one of the owners that
+/// let go, so this holds when owners on several threads drop at once.
+fn free_nested(values: &mut Vec<Value>) {
+    if !values.iter().any(|v| matches!(v, Value::Vec(_) | Value::Closure(_))) {
+        return;
+    }
+    let mut work = std::mem::take(values);
+    while let Some(v) = work.pop() {
+        match v {
+            Value::Vec(xs) => {
+                if let Some(mut elems) = xs.take_buf() {
+                    work.append(&mut elems);
+                }
+            }
+            Value::Closure(c) => {
+                if let Some(mut c) = Arc::into_inner(c) {
+                    work.append(&mut c.captured);
+                }
+            }
+            _ => {}
+        }
+        // Whatever is dropped here has nothing left inside it.
+    }
+}
 
 /// Fills dead buffer slots.
 const DEAD: Value = Value::Bool(false);
@@ -39,7 +92,7 @@ impl Drop for Vector {
         // SAFETY: `buf` is not used again; `drop` runs once.
         let buf = unsafe { ManuallyDrop::take(&mut self.buf) };
         if let Some(mut elems) = Arc::into_inner(buf) {
-            crate::rt::free_nested(&mut elems);
+            free_nested(&mut elems);
         }
     }
 }

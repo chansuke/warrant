@@ -21,7 +21,7 @@ const LAYERS: &[&[&str]] = &[
     &["vc", "cache"],
     &["verify"],
     &["specdiff", "ir"],
-    &["vector"],
+    &["value"],
     &["rt"],
     // The M1 interpreter, kept as the oracle of tests/runtime_diff.rs until M2-7.
     &["eval"],
@@ -29,7 +29,7 @@ const LAYERS: &[&[&str]] = &[
 
 /// Uses that point up, from before this check existed. This list only
 /// shrinks: cut one cycle, then remove its entry here. Never add one.
-const KNOWN_VIOLATIONS: &[(&str, &str)] = &[("vector", "rt"), ("contracts", "vc"), ("contracts", "verify"), ("rt", "eval")];
+const KNOWN_VIOLATIONS: &[(&str, &str)] = &[("contracts", "vc"), ("contracts", "verify"), ("rt", "eval")];
 
 #[test]
 fn modules_use_only_lower_layers() {

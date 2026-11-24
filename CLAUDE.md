@@ -45,7 +45,7 @@ formal/lean/check.sh                                       # Lean の証明を�
 | `src/specdiff.rs` | 仕様差分ガード。節ごとの変更と判定（weakened / strengthened / refined / new）、精緻化の SMT 証明 |
 | `src/cache.rs` | VC 単位の証明キャッシュ（既定 `~/.cache/warrant/proofs`、キーはソルバの fingerprint とスクリプト） |
 | `src/ir.rs` | 実行用 IR。`Program::new` が `Module` をスロットの環境にコンパイルし、`Checks` が残す節だけを含める |
-| `src/vector.rs` | IR のランタイムのベクタ。共有バッファと範囲、参照が1つのときだけその場で書く `cons` / `concat` |
+| `src/value.rs` | IR のランタイムの値 `Value` とベクタ。共有バッファと範囲、参照が1つのときだけその場で書く `cons` / `concat` |
 | `src/rt.rs` | IR の評価器 `Interp`（契約、エフェクト、組み込み関数）。`run` / `bench` はこれを使う |
 | `src/eval.rs` | M1 のインタプリタ（`Sexp` を評価する）。差分テストの oracle としてだけ残し、M2-7 で消す。`RtError` もここにある |
 | `src/profile.rs` | `Profiler` と `report`（S式出力） |

@@ -17,7 +17,7 @@ pub mod smt;
 pub mod solver;
 pub mod specdiff;
 pub mod types;
+pub mod value;
 pub mod vc;
-pub mod vector;
 pub mod verify;
 pub mod wisp;

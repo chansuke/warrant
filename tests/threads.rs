@@ -1,8 +1,7 @@
 //! Runtime values shared between threads (M2-4).
 
 use std::sync::{Arc, Barrier};
-use warrant::rt::Value;
-use warrant::vector::Vector;
+use warrant::value::{Value, Vector};
 
 /// Two chains `a_k = [a_(k-1)]` and `b_k = [a_(k-1)]` share every level, and
 /// two threads with small stacks drop one chain each at the same time.
