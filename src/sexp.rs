@@ -142,7 +142,7 @@ impl<'a> Lexer<'a> {
             }
         }
         let (l, c) = (self.line, self.col);
-        let ch = self.bump().unwrap();
+        let ch = self.bump().expect("the loop above returns at the end of input");
         let tok = match ch {
             '(' => Tok::LParen,
             ')' => Tok::RParen,

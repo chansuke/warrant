@@ -611,7 +611,10 @@ impl<'p> Interp<'p> {
                         o => self.prog.show(o),
                     })
                     .collect();
-                println!("{}", s.join(" "));
+                #[expect(clippy::print_stdout, reason = "print is the language's io effect; M2 has no other output channel yet")]
+                {
+                    println!("{}", s.join(" "));
+                }
                 Ok(Value::Bool(true))
             }
         }

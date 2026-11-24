@@ -1,4 +1,5 @@
 //! Drives the real `warrant` binary: output shape and exit codes.
+#![expect(clippy::disallowed_methods, reason = "these tests start the warrant binary")]
 
 use std::process::Command;
 use warrant::sexp::Sexp;

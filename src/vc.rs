@@ -712,11 +712,11 @@ impl<'a> Exec<'a> {
         };
         let inlinable = self.fresh == before;
         use Builtin as B;
-        match (b, out) {
-            (B::Map, V::T(body)) if inlinable && vs(ret).is_some() => {
-                V::T(format!("(mk-{rs} (lambda (({k} Int)) {body}) (len-{s} {v}))", rs = vs(ret).unwrap(), k = k, body = body, s = s, v = v))
+        match (b, out, vs(ret)) {
+            (B::Map, V::T(body), Some(rs)) if inlinable => {
+                V::T(format!("(mk-{rs} (lambda (({k} Int)) {body}) (len-{s} {v}))", rs = rs, k = k, body = body, s = s, v = v))
             }
-            (B::All, V::T(body)) if inlinable => V::T(format!("(forall (({k} Int)) (=> {bounds} {body}))", k = k, bounds = in_bounds, body = body)),
+            (B::All, V::T(body), _) if inlinable => V::T(format!("(forall (({k} Int)) (=> {bounds} {body}))", k = k, bounds = in_bounds, body = body)),
             _ => {
                 let r = self.fresh_val(ret, b.name());
                 if let (V::T(r), Some(rs)) = (&r, vs(ret)) {
