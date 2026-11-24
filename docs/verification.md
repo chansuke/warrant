@@ -42,7 +42,7 @@ when its code is gone or a test now catches the mistake on its own.
 
 ### No input makes warrant panic
 
-- Paths: `src/sexp.rs`, `src/wisp.rs`, `src/ast.rs`, `src/types.rs`, `src/rt.rs`, `src/vector.rs`, `src/eval.rs`
+- Paths: `src/sexp.rs`, `src/wisp.rs`, `src/ast.rs`, `src/types.rs`, `src/rt.rs`, `src/value.rs`, `src/eval.rs`
 - Check: Deep nesting, huge numbers, impossible ranges and sizes end in an
   `(error ...)`, not a panic or a stack overflow. Add the shape to the
   generators in `tests/properties.rs` or a case to `tests/cli.rs`.
@@ -71,7 +71,7 @@ when its code is gone or a test now catches the mistake on its own.
 
 ### Performance changes carry a measurement
 
-- Paths: `src/rt.rs`, `src/ir.rs`, `src/vector.rs`, `src/profile.rs`
+- Paths: `src/rt.rs`, `src/ir.rs`, `src/value.rs`, `src/profile.rs`
 - Check: Run `scripts/verify bench` and put the msort median, before and
   after, in the commit message. CI fails a slowdown over 15%.
 - Incidents: `4f3ddb6`, `863c5f9` (#5), `5db11d8` (#6).
