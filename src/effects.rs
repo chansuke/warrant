@@ -11,7 +11,7 @@
 
 use crate::ast::{EffectSet, Expr, ExprKind, FnDecl, Module, Type};
 use crate::builtin::Builtin;
-use crate::diag::Diag;
+use crate::diag::{Diag, ErrorKind};
 use crate::sexp::Pos;
 use std::collections::BTreeMap;
 
@@ -60,7 +60,7 @@ pub fn check(m: &Module) -> (EffectInfo, Vec<Diag>) {
             if !declared.contains(eff) {
                 let decl = crate::ast::effects_sexp(declared);
                 errors.push(Diag::new(
-                    "effect",
+                    ErrorKind::Effect,
                     src.at,
                     format!("`{}` declares (:effects {}) but performs {} via ({})", d.name, decl, eff, src.via.join(" ")),
                 ));
@@ -129,7 +129,7 @@ impl Walker<'_> {
         for (eff, src) in lat {
             if !allowed.contains(eff) {
                 errors.push(Diag::new(
-                    "effect",
+                    ErrorKind::Effect,
                     at,
                     format!("{} that performs {} via ({}), but its type allows only {}", what, eff, src.via.join(" "), crate::ast::effects_sexp(allowed)),
                 ));

@@ -1,6 +1,7 @@
 //! Drives the real `warrant` binary: output shape and exit codes.
 
 use std::process::Command;
+use warrant::sexp::Sexp;
 
 struct Out {
     code: i32,
@@ -262,4 +263,55 @@ fn report_breaks_time_down_by_function_clause_and_builtin() {
     assert!(o.stdout.contains("(merge ensures 1 :checks 21587 "), "{}", o.stdout);
     assert!(o.stdout.contains("(perm? 25586)"), "{}", o.stdout);
     assert!(!o.stdout.contains("until M1"), "{}", o.stdout);
+}
+
+/// The exit code each error kind promises: 1 for a failure of the program,
+/// 2 for input the tool could not take. A new kind must be added here.
+fn exit_class(kind: &str) -> i32 {
+    match kind {
+        "type" | "effect" | "contract" | "overflow" | "div-zero" | "bounds" | "arity" | "unbound" | "stack" | "alloc" => 1,
+        "parse" | "syntax" | "load" | "io" | "usage" => 2,
+        other => panic!("kind {} has no exit class; add it to exit_class", other),
+    }
+}
+
+/// `(error :kind K ...)` -> `K`.
+fn error_kind(form: &Sexp) -> Option<&str> {
+    let Sexp::List(items) = form else { return None };
+    match items.as_slice() {
+        [Sexp::Sym(head), Sexp::Kw(k), Sexp::Sym(kind), ..] if head == "error" && k == "kind" => Some(kind),
+        _ => None,
+    }
+}
+
+#[test]
+fn every_error_kind_prints_one_sexp_and_exits_with_its_class() {
+    let cases: &[(&str, &str, &[&str])] = &[
+        ("parse", "(defn main [] -> i64 (\n", &[]),
+        ("syntax", "(defn main 1)\n", &[]),
+        ("load", "(defn main [] -> i64 1)\n(defn main [] -> i64 2)\n", &[]),
+        ("load", "(defn f [] -> i64 1)\n", &[]),
+        ("type", ILL_TYPED, &[]),
+        ("type", "(defn main [] -> Int 1)\n", &[]),
+        ("unbound", "(defn main [] -> i64 y)\n", &[]),
+        ("effect", "(defn f [] -> i64 (:effects []) (do (print 1) 1))\n(defn main [] -> i64 (f))\n", &[]),
+        ("overflow", "(defn main [] -> i64 (+ 9223372036854775807 1))\n", &["--no-contracts"]),
+        ("div-zero", "(defn main [] -> i64 (/ 1 0))\n", &["--no-contracts"]),
+        ("bounds", "(defn main [] -> i64 (get [1] 5))\n", &["--no-contracts"]),
+        ("contract", "(defn f [x : i64] -> i64 (:requires (> x 0)) x)\n(defn main [] -> i64 (f 0))\n", &["--contracts", "runtime"]),
+        ("usage", "(defn main [] -> i64 1)\n", &["--contracts", "sometimes"]),
+    ];
+    for (i, (want, src, opts)) in cases.iter().enumerate() {
+        let path = source(&format!("kind-{}.wrt", i), src);
+        let mut args = vec!["run", path.as_str()];
+        args.extend_from_slice(opts);
+        let o = warrant(&args);
+        let forms = warrant::sexp::parse_all(&o.stdout).unwrap_or_else(|e| panic!("stdout is not S-expressions ({}): {}", e.to_sexp(), o.stdout));
+        let kinds: Vec<&str> = forms.iter().filter_map(error_kind).collect();
+        assert_eq!(kinds, [*want], "{}", o.stdout);
+        assert_eq!(o.code, exit_class(want), "{}", o.stdout);
+    }
+    let missing = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("cli/no-such-file.wrt");
+    let o = warrant(&["run", &missing.to_string_lossy()]);
+    assert_eq!(o.code, exit_class("io"), "{}", o.stdout);
 }

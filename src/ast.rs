@@ -3,7 +3,7 @@
 //! evaluates the `Sexp` bodies kept beside each declaration.
 
 use crate::builtin::Builtin;
-use crate::diag::Diag;
+use crate::diag::{Diag, ErrorKind};
 use crate::sexp::{flat, Pos, Sexp, SpanTree};
 use std::collections::{BTreeSet, HashMap};
 
@@ -189,7 +189,7 @@ impl Module {
 type R<T> = Result<T, Diag>;
 
 fn syntax(at: Pos, msg: impl Into<String>) -> Diag {
-    Diag::new("syntax", at, msg)
+    Diag::new(ErrorKind::Syntax, at, msg)
 }
 
 fn sym(e: &Sexp) -> Option<&str> {
@@ -208,7 +208,7 @@ pub fn lower(forms: &[Sexp], spans: &[SpanTree]) -> R<Module> {
         }
         let Some(Sexp::Sym(name)) = items.get(1) else { return Err(syntax(sp.at, "defn needs a name")) };
         if index.insert(name.clone(), index.len()).is_some() {
-            return Err(Diag::new("load", sp.kids[1].at, format!("duplicate definition of {}", name)));
+            return Err(Diag::new(ErrorKind::Load, sp.kids[1].at, format!("duplicate definition of {}", name)));
         }
     }
     let mut lw = Lowerer { globals: &index, next_id: 0, scope: Vec::new() };
@@ -238,11 +238,11 @@ impl Lowerer<'_> {
             .into_iter()
             .map(|p| match p.ty {
                 Some(ty) => Ok(Param { name: p.name, ty, at: p.at }),
-                None => Err(Diag::new("type", p.at, format!("parameter `{}` of {} needs a type: `{} : T`", p.name, name, p.name))),
+                None => Err(Diag::new(ErrorKind::Type, p.at, format!("parameter `{}` of {} needs a type: `{} : T`", p.name, name, p.name))),
             })
             .collect::<R<_>>()?;
         if items.get(3).and_then(sym) != Some("->") || items.get(4).is_none() {
-            return Err(Diag::new("type", kids[1].at, format!("defn {} needs a return type: `[params] -> T`", name)));
+            return Err(Diag::new(ErrorKind::Type, kids[1].at, format!("defn {} needs a return type: `[params] -> T`", name)));
         }
         let ret = parse_type(&items[4], &kids[4])?;
 
@@ -305,7 +305,7 @@ impl Lowerer<'_> {
         if let Some(b) = Builtin::from_name(s) {
             return Ok(ExprKind::Builtin(b));
         }
-        Err(Diag::new("unbound", at, format!("unbound symbol `{}`", s)))
+        Err(Diag::new(ErrorKind::Unbound, at, format!("unbound symbol `{}`", s)))
     }
 
     fn exprs(&mut self, es: &[Sexp], sps: &[SpanTree]) -> R<Vec<Expr>> {
@@ -434,7 +434,7 @@ fn budget(xs: &[Sexp], sps: &[SpanTree]) -> R<Budget> {
 }
 
 pub fn parse_type(e: &Sexp, sp: &SpanTree) -> R<Type> {
-    let bad = || Diag::new("type", sp.at, format!("unknown type `{}`; expected i64, Bool, Str, (Vec T) or (Fn [T ...] R)", flat(e)));
+    let bad = || Diag::new(ErrorKind::Type, sp.at, format!("unknown type `{}`; expected i64, Bool, Str, (Vec T) or (Fn [T ...] R)", flat(e)));
     match e {
         Sexp::Sym(s) => match s.as_str() {
             "i64" => Ok(Type::I64),
@@ -474,7 +474,7 @@ mod tests {
     fn err_at(src: &str) -> (&'static str, usize, usize) {
         let d = lower_src(src).unwrap_err();
         let at = d.at.expect("positioned");
-        (d.kind, at.line, at.col)
+        (d.kind.as_str(), at.line, at.col)
     }
 
     #[test]
