@@ -67,11 +67,9 @@ step() {
 }
 
 if [ "$mode" = check ] || [ "$mode" = full ]; then
-  if ! command -v z3 >/dev/null; then
-    notes+=("z3 is not on PATH, so the tests that need it returned early: soundness, proofs in check, and spec-diff refinement were NOT checked. Run inside \`nix develop\`.")
-  fi
   step clippy cargo clippy --release --locked --all-targets -- -D warnings
-  step test cargo test --release --locked
+  # A test that needs z3 fails rather than skips when z3 is missing.
+  step test env WARRANT_REQUIRE_Z3=1 cargo test --release --locked
   if has_base; then
     scripts/verification-checklist.sh "$base" >"$out/checklist.md"
   else

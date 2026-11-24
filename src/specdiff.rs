@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn the_solver_clears_changes_that_only_refine_the_contract() {
-        let Some(z3) = Z3::find(5000) else { return };
+        let Some(z3) = Z3::find_for_test(5000) else { return };
         let refined = BASE.replace("(> result 0)", "(> result 1)").replace("(> x 0)", "(> x -1)");
         let d = diff(&module(BASE), &module(&refined), Some(&z3));
         let verdicts: Vec<&str> = d.spec.iter().map(|c| c.verdict.name()).collect();

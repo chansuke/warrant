@@ -53,11 +53,7 @@ fn effect_leak_is_rejected_by_check_and_before_run() {
 }
 
 fn have_z3() -> bool {
-    let ok = Command::new("z3").arg("--version").output().is_ok_and(|o| o.status.success());
-    if !ok {
-        eprintln!("z3 not found; skipping");
-    }
-    ok
+    warrant::solver::Z3::find_for_test(2000).is_some()
 }
 
 #[test]

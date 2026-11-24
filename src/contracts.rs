@@ -160,7 +160,7 @@ mod tests {
     use crate::solver::Z3;
 
     fn levels_of(src: &str) -> Option<(Module, ClauseLevels)> {
-        let z3 = Z3::find(5000)?;
+        let z3 = Z3::find_for_test(5000)?;
         let (f, s) = parse_all_spanned(src).unwrap();
         let m = lower(&f, &s).unwrap();
         let ty = crate::types::check(&m).unwrap();

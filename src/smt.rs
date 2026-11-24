@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn string_literals_mean_what_the_interpreter_means() {
-        let Some(z) = crate::solver::Z3::find(2000) else { return };
+        let Some(z) = crate::solver::Z3::find_for_test(2000) else { return };
         use crate::solver::{Outcome, Solver};
         for (lit, len) in [("\\u{41}", 6), ("a\"b", 3), ("\\", 1), ("é", 1)] {
             let script = format!("(assert (not (= (str.len {}) {})))", str_lit(lit), len);
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn truncating_division_matches_rust() {
-        let Some(z) = crate::solver::Z3::find(2000) else { return };
+        let Some(z) = crate::solver::Z3::find_for_test(2000) else { return };
         use crate::solver::{Outcome, Solver};
         for (a, b) in [(7i64, 2i64), (-7, 2), (7, -2), (-7, -2), (6, 3), (-1, 5)] {
             let script = format!("{}(assert (not (= (tdiv {} {}) {})))", PRELUDE, int_lit(a), int_lit(b), int_lit(a / b));
