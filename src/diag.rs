@@ -23,6 +23,8 @@ pub enum ErrorKind {
     Unbound,
     Stack,
     Alloc,
+    // A bug in warrant itself (a panic): exit 101, as Rust's runtime does.
+    Internal,
 }
 
 impl ErrorKind {
@@ -43,10 +45,12 @@ impl ErrorKind {
             ErrorKind::Unbound => "unbound",
             ErrorKind::Stack => "stack",
             ErrorKind::Alloc => "alloc",
+            ErrorKind::Internal => "internal",
         }
     }
 
-    /// 1 for a failure of the program, 2 for input the tool could not take.
+    /// 1 for a failure of the program, 2 for input the tool could not take,
+    /// 101 for a bug in warrant.
     pub fn exit_code(self) -> i32 {
         match self {
             ErrorKind::Parse | ErrorKind::Syntax | ErrorKind::Load | ErrorKind::Io | ErrorKind::Usage => 2,
@@ -60,6 +64,7 @@ impl ErrorKind {
             | ErrorKind::Unbound
             | ErrorKind::Stack
             | ErrorKind::Alloc => 1,
+            ErrorKind::Internal => 101,
         }
     }
 }

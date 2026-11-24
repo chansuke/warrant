@@ -58,7 +58,7 @@ formal/lean/check.sh                                       # Lean の証明を�
 
 1. **Wisp 往復**: 任意の正規形 `f` で `wisp::parse(&wisp::print_all(&f)) == f`。印字規則を変えたら `tests/m0.rs` と `wisp.rs` のテストを通す。新しい構文を足したら往復テストも足す
 2. **出力はすべて S式**。エラーは `(error :kind K :msg "..." ...)`。数値キーは単位付き（`-ms`）。人間向けの文章を stdout に混ぜない（usage だけは stderr）
-3. **終了コード**: 0 成功 / 1 実行時・契約・エフェクト違反 / 2 構文・ロード・使い方 / 3 性能予算超過。新しい失敗の種類は `diag::ErrorKind` に足し、`exit_code` で分類を決める
+3. **終了コード**: 0 成功 / 1 実行時・契約・エフェクト違反 / 2 構文・ロード・使い方 / 3 性能予算超過 / 101 内部エラー (panic、kind は internal)。新しい失敗の種類は `diag::ErrorKind` に足し、`exit_code` で分類を決める
 4. **i64 はラップしない**。算術は checked で、溢れたら `overflow` エラー
 5. エフェクト検査は推移的（呼び出しスタック上のすべての宣言を見る）
 6. 依存クレートは理由があるときだけ追加し、`docs/DESIGN.md` の Decision Log に1行書く
