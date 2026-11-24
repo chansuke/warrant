@@ -751,7 +751,7 @@ mod tests {
 
     /// `(fn kind outcome)` per obligation, in source order.
     fn verdicts(src: &str) -> Option<Vec<(String, String, String)>> {
-        let z = Z3::find(5000)?;
+        let z = Z3::find_for_test(5000)?;
         Some(
             obligations(src)
                 .into_iter()

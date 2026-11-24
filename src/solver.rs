@@ -40,6 +40,27 @@ impl Z3 {
         let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
         out.status.success().then_some(Z3 { version, timeout_ms })
     }
+
+    /// For tests that need z3: `None` means skip. With `WARRANT_REQUIRE_Z3=1`
+    /// (set by `scripts/verify` and CI) a missing z3 fails the test instead,
+    /// so "all tests passed" cannot hide a skipped proof.
+    pub fn find_for_test(timeout_ms: u64) -> Option<Z3> {
+        skip_or_fail(Z3::find(timeout_ms), std::env::var_os(REQUIRE_Z3).is_some_and(|v| v == "1"))
+    }
+}
+
+const REQUIRE_Z3: &str = "WARRANT_REQUIRE_Z3";
+
+fn skip_or_fail(found: Option<Z3>, required: bool) -> Option<Z3> {
+    if found.is_none() {
+        assert!(
+            !required,
+            "z3 5.1.0 not found on PATH but {}=1: run inside `nix develop`, install it (.github/install-z3.sh), or unset {}",
+            REQUIRE_Z3, REQUIRE_Z3
+        );
+        eprintln!("z3 not found; skipping");
+    }
+    found
 }
 
 struct Session {
@@ -177,11 +198,18 @@ mod tests {
     use super::*;
 
     fn z3() -> Option<Z3> {
-        let z = Z3::find(2000);
-        if z.is_none() {
-            eprintln!("z3 not found; skipping");
-        }
-        z
+        Z3::find_for_test(2000)
+    }
+
+    #[test]
+    #[should_panic(expected = "WARRANT_REQUIRE_Z3=1")]
+    fn a_missing_z3_fails_the_test_when_it_is_required() {
+        skip_or_fail(None, true);
+    }
+
+    #[test]
+    fn a_missing_z3_skips_the_test_otherwise() {
+        assert!(skip_or_fail(None, false).is_none());
     }
 
     #[test]

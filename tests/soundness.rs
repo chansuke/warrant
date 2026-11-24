@@ -115,10 +115,7 @@ fn run(src: &str, x: i64, y: i64) -> Result<(), String> {
 
 #[test]
 fn proved_functions_never_fail_at_run_time() {
-    let Some(z3) = Z3::find(2000) else {
-        eprintln!("z3 not found; skipping");
-        return;
-    };
+    let Some(z3) = Z3::find_for_test(2000) else { return };
     let mut r = Rng(0x005e_ed0f_5afe_c0de);
     let jobs = std::thread::available_parallelism().map_or(1, |n| n.get());
     let (mut proved, mut refuted) = (0, 0);
@@ -228,10 +225,7 @@ fn vec_lit(r: &mut Rng) -> String {
 
 #[test]
 fn proved_permutations_hold_at_run_time() {
-    let Some(z3) = Z3::find(500) else {
-        eprintln!("z3 not found; skipping");
-        return;
-    };
+    let Some(z3) = Z3::find_for_test(500) else { return };
     let mut r = Rng(0x0bad_5eed_0f9e_4321);
     let jobs = std::thread::available_parallelism().map_or(1, |n| n.get());
     let (mut proved, mut unproved) = (0, 0);
