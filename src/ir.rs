@@ -5,6 +5,7 @@
 use crate::ast::{Budget, Clause as AstClause, Expr, ExprKind, FnIdx, Module};
 use crate::builtin::Builtin;
 use crate::contracts::Checks;
+use crate::effects;
 use crate::sexp::Sexp;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,6 +37,20 @@ pub enum Node {
     /// `(cons head (f args...))` in tail position of `f` itself, which has
     /// no ensures to check (D29). The runtime loops instead of recursing.
     ConsTail(Box<Node>, Vec<Node>),
+    /// A call whose arguments include two or more calls of pure functions
+    /// (D30). The runtime may evaluate the arguments from `split` on in a
+    /// forked task while it evaluates the ones before.
+    Fork(Box<Fork>),
+}
+
+pub struct Fork {
+    /// A `CallGlobal` or `CallBuiltin`.
+    pub call: Node,
+    pub split: usize,
+    /// The slots the forked arguments read, copied into the task's frame.
+    /// `true` moves the value instead: the forked arguments read it last and
+    /// the ones before do not read it.
+    pub copy: Vec<(Slot, bool)>,
 }
 
 pub struct Lambda {
@@ -75,6 +90,9 @@ pub struct Program {
 
 impl Program {
     pub fn new(m: &Module, checks: &Checks) -> Program {
+        // Inferred, not declared: a function is pure when nothing it can
+        // reach performs an effect, including through closures.
+        let pure: Vec<bool> = effects::check(m).0.inferred.iter().map(|fx| fx.is_empty()).collect();
         let fns = m
             .fns
             .iter()
@@ -113,6 +131,9 @@ impl Program {
                     if let Some(n) = body.last_mut() {
                         cons_tails(n, i, d.params.len());
                     }
+                }
+                for n in &mut body {
+                    forks(n, &pure);
                 }
                 Fn {
                     name: d.name.clone(),
@@ -262,6 +283,8 @@ fn last_uses(n: &mut Node, live: &mut [bool]) {
             seq(args, live);
             last_uses(f, live);
         }
+        // Inserted after this pass.
+        Node::Fork(f) => last_uses(&mut f.call, live),
         // Creating a closure copies the captured slots, which reads them.
         Node::Lambda(l) => {
             for (outer, _) in &l.captures {
@@ -292,6 +315,151 @@ fn cons_tails(n: &mut Node, me: FnIdx, params: usize) {
             *n = Node::ConsTail(Box::new(head), call);
         }
         _ => {}
+    }
+}
+
+/// Wraps each call in `n` whose arguments are all pure and include two or
+/// more calls of pure functions in a `Fork`, outside lambdas. Runs after
+/// `last_uses`: it reads which slots are moved, and it keeps the order in
+/// which each side evaluates its arguments.
+fn forks(n: &mut Node, pure: &[bool]) {
+    match n {
+        Node::CallGlobal(_, args) | Node::CallBuiltin(_, args) => {
+            for a in args.iter_mut() {
+                forks(a, pure);
+            }
+            let heavy: Vec<usize> = (0..args.len()).filter(|&k| pure_call(&args[k], pure)).collect();
+            if heavy.len() < 2 || !args.iter().all(|a| is_pure(a, pure)) {
+                return;
+            }
+            let split = heavy[heavy.len() / 2];
+            let (before, after) = args.split_at(split);
+            let mut read_before = Vec::new();
+            for a in before {
+                reads(a, &mut read_before);
+            }
+            let mut read_after = Vec::new();
+            for a in after {
+                reads(a, &mut read_after);
+            }
+            let mut copy: Vec<(Slot, bool)> = Vec::new();
+            for (s, moved) in read_after {
+                let take = moved && !read_before.iter().any(|(b, _)| *b == s);
+                match copy.iter_mut().find(|(c, _)| *c == s) {
+                    Some(c) => c.1 |= take,
+                    None => copy.push((s, take)),
+                }
+            }
+            let call = std::mem::replace(n, Node::Bool(false));
+            *n = Node::Fork(Box::new(Fork { call, split, copy }));
+        }
+        Node::VecLit(es) | Node::Do(es) | Node::And(es) | Node::Or(es) => {
+            for e in es {
+                forks(e, pure);
+            }
+        }
+        Node::If(c, t, f) => {
+            forks(c, pure);
+            forks(t, pure);
+            forks(f, pure);
+        }
+        Node::Let(binds, body) => {
+            for (_, v) in binds.iter_mut() {
+                forks(v, pure);
+            }
+            for e in body {
+                forks(e, pure);
+            }
+        }
+        Node::CallValue(f, args) | Node::ConsTail(f, args) => {
+            forks(f, pure);
+            for a in args {
+                forks(a, pure);
+            }
+        }
+        Node::Fork(f) => forks(&mut f.call, pure),
+        Node::Int(_)
+        | Node::Bool(_)
+        | Node::Str(_)
+        | Node::Local(_)
+        | Node::Move(_)
+        | Node::Global(_)
+        | Node::Builtin(_)
+        | Node::Lambda(_) => {}
+    }
+}
+
+/// A call of a pure top-level function: the work worth a task.
+fn pure_call(n: &Node, pure: &[bool]) -> bool {
+    match n {
+        Node::CallGlobal(f, _) => pure[*f],
+        Node::Fork(f) => pure_call(&f.call, pure),
+        _ => false,
+    }
+}
+
+/// Evaluating `n` performs no effect and calls no function value that
+/// might, so it may run in another order or on another thread. Calling a
+/// function value, or passing `map` and the like one that is not written
+/// out (a lambda, a top-level function or a builtin that calls none of its
+/// arguments), may print.
+fn is_pure(n: &Node, pure: &[bool]) -> bool {
+    let all = |es: &[Node]| es.iter().all(|e| is_pure(e, pure));
+    match n {
+        Node::Int(_) | Node::Bool(_) | Node::Str(_) | Node::Local(_) | Node::Move(_) => true,
+        Node::Global(f) => pure[*f],
+        Node::Builtin(b) => *b != Builtin::Print,
+        Node::Lambda(l) => all(&l.body),
+        Node::VecLit(es) | Node::Do(es) | Node::And(es) | Node::Or(es) => all(es),
+        Node::If(c, t, f) => is_pure(c, pure) && is_pure(t, pure) && is_pure(f, pure),
+        Node::Let(binds, body) => binds.iter().all(|(_, v)| is_pure(v, pure)) && all(body),
+        Node::CallGlobal(f, args) => pure[*f] && all(args),
+        Node::CallBuiltin(b, args) => {
+            // Each of these calls its first argument.
+            let calls = |b: &Builtin| matches!(b, Builtin::Map | Builtin::Fold | Builtin::Filter | Builtin::All);
+            let calls_first = calls(b);
+            // `(fold map p ..)` calls `p`, whatever `p` is.
+            let known = |a: &Node| match a {
+                Node::Lambda(_) | Node::Global(_) => true,
+                Node::Builtin(f) => !calls(f),
+                _ => false,
+            };
+            *b != Builtin::Print && all(args) && (!calls_first || args.first().is_none_or(known))
+        }
+        Node::Fork(f) => is_pure(&f.call, pure),
+        Node::CallValue(..) | Node::ConsTail(..) => false,
+    }
+}
+
+/// The slots `n` reads, and whether the read moves the value.
+fn reads(n: &Node, out: &mut Vec<(Slot, bool)>) {
+    let all = |es: &[Node], out: &mut Vec<(Slot, bool)>| {
+        for e in es {
+            reads(e, out);
+        }
+    };
+    match n {
+        Node::Local(s) => out.push((*s, false)),
+        Node::Move(s) => out.push((*s, true)),
+        Node::Int(_) | Node::Bool(_) | Node::Str(_) | Node::Global(_) | Node::Builtin(_) => {}
+        Node::Lambda(l) => out.extend(l.captures.iter().map(|(outer, _)| (*outer, false))),
+        Node::VecLit(es) | Node::Do(es) | Node::And(es) | Node::Or(es) | Node::CallGlobal(_, es) | Node::CallBuiltin(_, es) => all(es, out),
+        Node::If(c, t, f) => {
+            reads(c, out);
+            reads(t, out);
+            reads(f, out);
+        }
+        Node::Let(binds, body) => {
+            for (_, v) in binds {
+                reads(v, out);
+            }
+            all(body, out);
+        }
+        Node::CallValue(f, args) | Node::ConsTail(f, args) => {
+            reads(f, out);
+            all(args, out);
+        }
+        Node::Fork(f) => reads(&f.call, out),
     }
 }
 
