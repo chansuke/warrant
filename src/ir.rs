@@ -401,7 +401,8 @@ fn pure_call(n: &Node, pure: &[bool]) -> bool {
 /// Evaluating `n` performs no effect and calls no function value that
 /// might, so it may run in another order or on another thread. Calling a
 /// function value, or passing `map` and the like one that is not written
-/// out (a lambda, a top-level function or a builtin), may print.
+/// out (a lambda, a top-level function or a builtin that calls none of its
+/// arguments), may print.
 fn is_pure(n: &Node, pure: &[bool]) -> bool {
     let all = |es: &[Node]| es.iter().all(|e| is_pure(e, pure));
     match n {
@@ -415,8 +416,14 @@ fn is_pure(n: &Node, pure: &[bool]) -> bool {
         Node::CallGlobal(f, args) => pure[*f] && all(args),
         Node::CallBuiltin(b, args) => {
             // Each of these calls its first argument.
-            let calls_first = matches!(b, Builtin::Map | Builtin::Fold | Builtin::Filter | Builtin::All);
-            let known = |a: &Node| matches!(a, Node::Lambda(_) | Node::Global(_) | Node::Builtin(_));
+            let calls = |b: &Builtin| matches!(b, Builtin::Map | Builtin::Fold | Builtin::Filter | Builtin::All);
+            let calls_first = calls(b);
+            // `(fold map p ..)` calls `p`, whatever `p` is.
+            let known = |a: &Node| match a {
+                Node::Lambda(_) | Node::Global(_) => true,
+                Node::Builtin(f) => !calls(f),
+                _ => false,
+            };
             *b != Builtin::Print && all(args) && (!calls_first || args.first().is_none_or(known))
         }
         Node::Fork(f) => is_pure(&f.call, pure),
