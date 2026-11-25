@@ -285,6 +285,25 @@ fn report_breaks_time_down_by_function_clause_and_builtin() {
     }
 }
 
+/// On several threads, a function's own work in the arguments a task
+/// evaluates still counts as its self time. Here most of `main`'s time is
+/// its `range`, run beside the two calls of `w`; it counted as none.
+#[test]
+fn forked_arguments_count_in_self_time() {
+    let num = |line: &str, key: &str| -> f64 { line.split(key).nth(1).unwrap().split([' ', ')']).next().unwrap().parse().unwrap() };
+    let src = source(
+        "forked_self.wrt",
+        "(defn ones [n : i64] -> (Vec i64) (if (= n 0) [] (cons 1 (ones (- n 1)))))
+         (defn w [n : i64] -> i64 (len (ones n)))
+         (defn main [] -> i64 (+ (w 600000) (w 600000) (len (range 10000000))))\n",
+    );
+    let o = warrant(&["run", &src, "--report", "--threads", "4"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert!(o.stdout.contains("(forks 1)"), "{}", o.stdout);
+    let main = o.stdout.lines().find(|l| l.trim_start().starts_with("(main :calls")).expect("main in hot");
+    assert!(num(main, ":self-ms ") >= 0.25 * num(main, ":incl-ms "), "{}", main);
+}
+
 /// The exit code each error kind promises: 1 for a failure of the program,
 /// 2 for input the tool could not take. A new kind must be added here.
 fn exit_class(kind: &str) -> i32 {

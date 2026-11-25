@@ -468,21 +468,35 @@ fn forks_of(src: &str) -> u64 {
 #[test]
 fn forked_arguments_fail_in_order() {
     on_big_stack(|| {
-        let fns = "(defn bad [n : i64] -> i64 (/ 100 (- n n)))
+        let fns = "(defn bad [n : i64] -> i64 (/ n (- n n)))
                    (defn ok [n : i64] -> i64 (+ n 1))
                    (defn ones [n : i64] -> (Vec i64) (if (= n 0) [] (cons 1 (ones (- n 1)))))
-                   (defn spin [n : i64] -> i64 (len (ones n)))";
+                   (defn spin [n : i64] -> i64 (len (ones n)))
+                   (defn slow [n : i64] -> i64 (len (ones 2000)))
+                   (defn left [n : i64] -> i64 (+ (bad 7) (slow 0)))
+                   (defn right [n : i64] -> i64 (+ (slow 0) (spin 200000000)))";
         for (body, want) in [
             ("(+ (ok 1) (ok 2))", Ok("5".to_string())),
-            ("(+ (ok 1) (bad 2))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
-            ("(+ (bad 1) (bad 2))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
-            ("(+ (ok 1) (+ 2 (bad 3)) (ok 4))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
+            ("(+ (ok 1) (bad 2))", error("div-zero", "(/ 2 0)", &["bad", "main"])),
+            ("(+ (bad 1) (bad 2))", error("div-zero", "(/ 1 0)", &["bad", "main"])),
+            ("(+ (ok 1) (+ 2 (bad 3)) (ok 4) (bad 5))", error("div-zero", "(/ 3 0)", &["bad", "main"])),
             // Without stopping, the task beside would build 2*10^8 elements.
-            ("(+ (bad 1) (spin 200000000))", error("div-zero", "(/ 100 0)", &["bad", "main"])),
+            ("(+ (bad 1) (spin 200000000))", error("div-zero", "(/ 1 0)", &["bad", "main"])),
         ] {
             let src = format!("{} (defn main [] -> i64 {})", fns, body);
             assert_eq!(same(&src), want, "{}", body);
             assert!(forks_of(&src) > 0, "{} did not fork", body);
+        }
+        // `left` fails while the thread that runs it waits for its `slow`,
+        // and that thread may take `spin` from `right` meanwhile: the
+        // failure must stop `spin` before `left` returns. Half of the runs
+        // took that path before.
+        let src = format!("{} (defn main [] -> i64 (+ (left 0) (right 0)))", fns);
+        let m = module(&src);
+        let checks = Checks::new(&m, Mode::Off, None);
+        for _ in 0..10 {
+            let (r, _) = run_ir_on(&m, &checks, threads());
+            assert_eq!(r, Err(("div-zero".into(), "(/ 7 0)".into(), vec!["bad".into(), "left".into(), "main".into()])));
         }
     });
 }
@@ -503,6 +517,8 @@ fn effects_are_never_forked() {
             "(let [f (fn [x] (do (print x) x))] (+ (ok 1) (ok 2) (len (map f [3]))))",
             "(let [f (fn [x] (do (print x) x))] (+ (ok 1) (ok (f 2))))",
             "(let [f (fn [x] (do (print x) x))] (+ (ok 1) (ok 2) (len (map (if true f f) [3]))))",
+            // `fold` calls `map`, which calls `p`.
+            "(let [p print] (+ (ok 1) (ok (do (fold map p [[42]]) 0))))",
         ] {
             let src = format!("{} (defn main [] -> i64 {})", fns, body);
             let _ = same(&src);
@@ -526,17 +542,35 @@ fn parallel_runs_repeat_exactly() {
             )
         };
         let pool = Pool::new(8).unwrap();
-        for leaf in ["(* lo lo)", "(/ 1000 (- lo 37))", "(if (> lo 90) (/ 1 0) (/ 1000 (- lo 200)))"] {
+        // The last fails at lo = 37 first in order and at lo = 201 later,
+        // with another message.
+        for leaf in ["(* lo lo)", "(/ 1000 (- lo 37))", "(if (> lo 200) (/ 2 0) (/ 1000 (- lo 37)))"] {
             let src = tree(leaf);
-            let want = same(&src);
+            let _ = same(&src);
             let m = module(&src);
             let checks = Checks::new(&m, Mode::Runtime, None);
-            let first = run_ir_on(&m, &checks, &pool);
-            assert_eq!(first.0, want);
+            let want = run_ir(&m, &checks);
             for _ in 0..100 {
-                assert_eq!(run_ir_on(&m, &checks, &pool), first, "{}", leaf);
+                assert_eq!(run_ir_on(&m, &checks, &pool), want, "{}", leaf);
             }
             assert!(forks_of(&src) > 0);
         }
+    });
+}
+
+/// A pool sets how far forks nest only while it runs `main`: called
+/// directly afterwards, the interpreter forks nothing, so it never runs on
+/// rayon's global pool with its small stacks.
+#[test]
+fn forks_stay_inside_the_pool() {
+    on_big_stack(|| {
+        let m = module("(defn ok [n : i64] -> i64 (+ n 1)) (defn main [] -> i64 (+ (ok 1) (ok 2)))");
+        let prog = warrant::ir::Program::new(&m, &Checks::new(&m, Mode::Off, None));
+        let mut it = warrant::rt::Interp::new(&prog, false);
+        assert!(threads().call_main(&mut it).is_ok());
+        let forks = it.prof.forks;
+        assert!(forks > 0);
+        assert!(it.call_main().is_ok());
+        assert_eq!(it.prof.forks, forks);
     });
 }
