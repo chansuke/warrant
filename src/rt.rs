@@ -9,7 +9,7 @@
 use crate::builtin::Builtin;
 use crate::diag::{ErrorKind, RtError};
 use crate::ir::{Clause, Fn, Fork, Node, Program};
-use crate::profile::Profiler;
+use crate::profile::{ForkTimes, Profiler};
 use crate::sexp::{flat, quote_str};
 use crate::value::{Closure, Copied, Value, Vector};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -48,10 +48,16 @@ impl Pool {
     /// Runs `main` on this pool's threads, forking where the program allows.
     pub fn call_main(&self, it: &mut Interp<'_>) -> R<Value> {
         let threads = self.threads();
-        it.forks_left = if threads <= 1 { 0 } else { threads.next_power_of_two().trailing_zeros() as usize + FORK_SLACK };
         match &self.0 {
             None => it.call_main(),
-            Some(p) => p.install(|| it.call_main()),
+            Some(p) => {
+                // Only inside `install`: a join outside it would run on
+                // rayon's global pool, whose stacks are small.
+                it.forks_left = threads.next_power_of_two().trailing_zeros() as usize + FORK_SLACK;
+                let r = p.install(|| it.call_main());
+                it.forks_left = 0;
+                r
+            }
         }
     }
 }
@@ -151,22 +157,47 @@ pub struct Interp<'p> {
     /// How many more forks may nest below this point; 0 runs `Fork` as the
     /// call it wraps.
     forks_left: usize,
-    /// Set when the task this one runs beside has failed: what this task
-    /// computes is then thrown away, so it stops at the next call.
+    /// One per fork this code runs in the later arguments of. Set when the
+    /// earlier arguments fail: what this code computes is then thrown away,
+    /// so it stops at the next call or builtin.
     stops: Vec<Arc<AtomicBool>>,
+    /// One per fork this code runs in the earlier arguments of. Nothing
+    /// catches an error, so a failure here fails each of those forks'
+    /// earlier arguments, and their later ones can stop at once, before
+    /// the error reaches them (D30).
+    fails: Vec<Arc<AtomicBool>>,
 }
 
 impl<'p> Interp<'p> {
     pub fn new(prog: &'p Program, profile: bool) -> Self {
-        Interp { prog, prof: Profiler::new(profile), effect_stack: Vec::new(), depth: 0, forks_left: 0, stops: Vec::new() }
+        Interp {
+            prog,
+            prof: Profiler::new(profile),
+            effect_stack: Vec::new(),
+            depth: 0,
+            forks_left: 0,
+            stops: Vec::new(),
+            fails: Vec::new(),
+        }
     }
 
     fn stopped(&self) -> R<()> {
         if self.stops.iter().any(|s| s.load(Ordering::Relaxed)) {
-            // Never seen: the failure of the other task wins.
+            // Never seen: the failure of the earlier arguments wins.
             return Err(RtError::new(ErrorKind::Internal, "a forked task was stopped"));
         }
         Ok(())
+    }
+
+    /// Runs `f` as code in the earlier arguments of the forks in `fails`.
+    fn failing<T>(&mut self, f: impl FnOnce(&mut Self) -> R<T>) -> R<T> {
+        let r = f(self);
+        if r.is_err() {
+            for s in &self.fails {
+                s.store(true, Ordering::Relaxed);
+            }
+        }
+        r
     }
 
     /// Evaluates `args`: those before `f.split` here, the rest in a task
@@ -188,27 +219,36 @@ impl<'p> Interp<'p> {
             depth: self.depth,
             forks_left: self.forks_left - 1,
             stops,
+            // A failure of the task fails this call, so it fails what this
+            // code fails.
+            fails: self.fails.clone(),
         };
         self.forks_left -= 1;
+        self.fails.push(stop);
         self.prof.forks += 1;
-        let (mine, theirs) = rayon::join(
+        let before = self.prof.callees();
+        let start = Instant::now();
+        let ((mine, mine_ns), (theirs, theirs_ns)) = rayon::join(
             || {
-                let r = self.eval_all(mine, frame);
-                if r.is_err() {
-                    stop.store(true, Ordering::Relaxed);
-                }
-                r
+                let t = Instant::now();
+                let r = self.failing(|it| it.eval_all(mine, frame));
+                (r, t.elapsed().as_nanos())
             },
             || {
-                let r = task.eval_all(theirs, &mut their_frame);
-                (r, task.prof)
+                let t = Instant::now();
+                let r = task.failing(|it| {
+                    it.stopped()?;
+                    it.eval_all(theirs, &mut their_frame)
+                });
+                (r, t.elapsed().as_nanos())
             },
         );
+        let wall_ns = start.elapsed().as_nanos();
+        self.fails.pop();
         self.forks_left += 1;
         // In order, a failure here means the task's arguments never ran.
         let mut mine = mine?;
-        let (theirs, prof) = theirs;
-        self.prof.merge(prof);
+        self.prof.merge(task.prof, &ForkTimes { before, wall_ns, mine_ns, theirs_ns });
         mine.extend(theirs?);
         Ok(mine)
     }
@@ -405,10 +445,11 @@ impl<'p> Interp<'p> {
         let mut heads = Vec::new();
         let mut args = args;
         let res = loop {
-            if let Err(e) = self.stopped() {
-                break Err((e, heads.len()));
-            }
             self.prof.enter(&def.name, self.depth);
+            // After `enter`, so the profiler's frames close as on any error.
+            if let Err(e) = self.stopped() {
+                break Err((e, heads.len() + 1));
+            }
             // ConsTail is compiled only for calls with the right arity.
             let mut frame = args;
             frame.resize(def.frame, UNSET);
@@ -631,6 +672,9 @@ impl<'p> Interp<'p> {
                 Ok(Value::Vec(v))
             }
             B::Range => {
+                // The one builtin whose size comes from a number, not from
+                // the vectors it is given: a stopped task must not build it.
+                self.stopped()?;
                 arity(name, &args, 1)?;
                 let n = int(&args[0], name)?;
                 if n < 0 {

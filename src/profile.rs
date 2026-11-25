@@ -43,11 +43,32 @@ pub struct Profiler {
     pub builtins: Vec<u64>,
     /// Arguments evaluated in a forked task (M2-5).
     pub forks: u64,
-    /// Open calls: when each started and how long its callees took so far.
-    frames: Vec<(Instant, u128)>,
-    /// Time of the calls that returned with no open call around them: in a
-    /// forked task, the calls it made for its caller.
-    outer_ns: u128,
+    /// Open calls: when each started, and its time so far outside its body.
+    frames: Vec<(Instant, Span)>,
+    /// The same for the code outside any open call: in a forked task, the
+    /// arguments it evaluates for its caller.
+    outer: Span,
+}
+
+/// What to take off, and add to, an open call's wall time to get its self
+/// time.
+#[derive(Default)]
+struct Span {
+    /// Time in its callees, and in the forks it waited on.
+    callees: u128,
+    /// Time its own code took in forks, on every thread.
+    credit: u128,
+}
+
+/// One fork's times, for `Profiler::merge`.
+pub struct ForkTimes {
+    /// The open call's `callees` before the fork.
+    pub before: u128,
+    /// From the fork to the join.
+    pub wall_ns: u128,
+    /// Evaluating the earlier arguments, and the later ones in the task.
+    pub mine_ns: u128,
+    pub theirs_ns: u128,
 }
 
 impl Profiler {
@@ -85,23 +106,32 @@ impl Profiler {
                 self.fns.insert(name.to_string(), FnStat { calls: 1, active: 1, ..Default::default() });
             }
         }
-        self.frames.push((Instant::now(), 0));
+        self.frames.push((Instant::now(), Span::default()));
     }
 
     pub fn exit(&mut self, name: &str) {
-        let Some((start, callees)) = self.frames.pop() else { return };
+        let Some((start, span)) = self.frames.pop() else { return };
         let ns = start.elapsed().as_nanos();
-        match self.frames.last_mut() {
-            Some(parent) => parent.1 += ns,
-            None => self.outer_ns += ns,
-        }
+        self.span().callees += ns;
         if let Some(s) = self.fns.get_mut(name) {
             s.active -= 1;
-            s.self_ns += ns.saturating_sub(callees);
+            s.self_ns += (ns + span.credit).saturating_sub(span.callees);
             if s.active == 0 {
                 s.incl_ns += ns;
             }
         }
+    }
+
+    fn span(&mut self) -> &mut Span {
+        match self.frames.last_mut() {
+            Some((_, span)) => span,
+            None => &mut self.outer,
+        }
+    }
+
+    /// The open call's time in callees so far, for `ForkTimes::before`.
+    pub fn callees(&mut self) -> u128 {
+        self.span().callees
     }
 
     /// The profiler of a forked task. Functions open here stay open there,
@@ -116,10 +146,11 @@ impl Profiler {
         p
     }
 
-    /// Adds a forked task's counts. Its time counts as time in callees of
-    /// the open call, so with tasks on other threads a function's self time
-    /// is what remains of its wall time, and inclusive times add CPU time.
-    pub fn merge(&mut self, task: Profiler) {
+    /// Adds a forked task's counts and times. The open call's self time
+    /// leaves out the wait for the join and takes in what its own code did
+    /// on both sides, so with tasks on other threads self times and the
+    /// inclusive times of callees add up CPU time.
+    pub fn merge(&mut self, task: Profiler, t: &ForkTimes) {
         self.calls += task.calls;
         self.closure_calls += task.closure_calls;
         self.builtin_calls += task.builtin_calls;
@@ -143,10 +174,11 @@ impl Profiler {
             s.incl_ns += t.incl_ns;
             s.self_ns += t.self_ns;
         }
-        match self.frames.last_mut() {
-            Some(open) => open.1 += task.outer_ns,
-            None => self.outer_ns += task.outer_ns,
-        }
+        let span = self.span();
+        let mine = t.mine_ns.saturating_sub(span.callees.saturating_sub(t.before));
+        let theirs = (t.theirs_ns + task.outer.credit).saturating_sub(task.outer.callees);
+        span.callees = t.before + t.wall_ns;
+        span.credit += mine + theirs;
     }
 
     pub fn vec_alloc(&mut self, elems: usize) {
