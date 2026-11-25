@@ -403,3 +403,34 @@ fn threads_must_be_a_positive_count() {
     assert_eq!(o.code, 0, "{}", o.stdout);
     assert!(o.stdout.contains("(threads 2)"), "{}", o.stdout);
 }
+
+/// `bench --scaling` times 1, 2, 4, ... threads and `--threads N` itself,
+/// and compares each with this runtime on one thread.
+#[test]
+fn bench_scaling_compares_each_thread_count_with_one() {
+    // `sexp::parse_all` reads no decimals, so the rows are read as text.
+    let rows = |out: &str| -> Vec<(String, Vec<String>)> {
+        let body = out.split("(scaling").nth(1).unwrap_or_else(|| panic!("no scaling: {}", out));
+        body.lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("(threads "))
+            .map(|l| {
+                let words: Vec<&str> = l.split([' ', '(', ')']).filter(|w| !w.is_empty()).collect();
+                (words[1].to_string(), words.iter().filter_map(|w| w.strip_prefix(':')).map(str::to_string).collect())
+            })
+            .collect()
+    };
+    let o = warrant(&["bench", "examples/msort.wrt", "-n", "2", "--threads", "5", "--scaling"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    let got = rows(&o.stdout);
+    assert_eq!(got.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["1", "2", "4", "5"], "{}", o.stdout);
+    for (t, keys) in &got {
+        let want: &[&str] =
+            if t == "1" { &["median-ms", "cpu-ms", "forks"] } else { &["median-ms", "cpu-ms", "forks", "speedup", "efficiency"] };
+        assert_eq!(keys, want, "{}", o.stdout);
+    }
+    assert!(o.stdout.contains("(budget :wall-ms 500 "), "{}", o.stdout);
+    let o = warrant(&["bench", "examples/msort.wrt", "-n", "1", "--threads", "1", "--scaling"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert_eq!(rows(&o.stdout).len(), 1, "{}", o.stdout);
+}

@@ -46,8 +46,9 @@ const USAGE: &str = "usage: warrant <command> FILE [options]
                                                  run (defn main [] ...)
   check FILE                                     parse, load, type-check, prove contracts with z3
   fmt   FILE [--to wisp|sexp]                    convert between canonical S-expr and the Wisp view
-  bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck] [--threads N]
+  bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck] [--threads N] [--scaling]
                                                  time main N times; enforce (:budget (wall-ms N)) on main
+                                                 --scaling: time 1, 2, 4, ... and N threads in turn
   spec-diff OLD NEW [--no-smt] [--timeout-ms N]  list spec changes; exit 1 if a contract was weakened
 Proof options (check, and run/bench with --contracts auto, the default):
   --timeout-ms N (per VC, default 2000)  --jobs N (default: all cores)  --no-cache
@@ -62,7 +63,7 @@ const PROOF_OPTS: &[(&str, bool)] = &[("--timeout-ms", true), ("--jobs", true), 
 const RUN_OPTS: &[(&str, bool)] =
     &[("--report", false), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false), ("--threads", true)];
 const BENCH_OPTS: &[(&str, bool)] =
-    &[("-n", true), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false), ("--threads", true)];
+    &[("-n", true), ("--contracts", true), ("--no-contracts", false), ("--no-typecheck", false), ("--threads", true), ("--scaling", false)];
 const FMT_OPTS: &[(&str, bool)] = &[("--to", true)];
 const SPEC_DIFF_OPTS: &[(&str, bool)] = &[("--no-smt", false), ("--timeout-ms", true)];
 
@@ -332,13 +333,16 @@ fn check(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
 const MAX_THREADS: u64 = 1024;
 
 /// The pool `--threads` asks for, all cores by default.
-fn pool(opts: &[String]) -> Result<Pool, i32> {
+fn threads(opts: &[String]) -> Result<usize, i32> {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as u64;
     let threads = positive(opts, "--threads", cores.min(MAX_THREADS))?;
     if threads > MAX_THREADS {
         return Err(usage_error(&format!("--threads must be at most {}", MAX_THREADS)));
     }
-    let threads = threads as usize;
+    Ok(threads as usize)
+}
+
+fn pool(threads: usize) -> Result<Pool, i32> {
     Pool::new(threads).map_err(|e| {
         println!("{}", e.to_sexp());
         e.kind.exit_code()
@@ -350,7 +354,7 @@ fn run(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
         Ok(p) => p,
         Err(c) => return c,
     };
-    let pool = match pool(opts) {
+    let pool = match threads(opts).and_then(pool) {
         Ok(pool) => pool,
         Err(c) => return c,
     };
@@ -388,36 +392,74 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
         Ok(p) => p,
         Err(c) => return c,
     };
-    let pool = match pool(opts) {
-        Ok(pool) => pool,
+    let most = match threads(opts) {
+        Ok(t) => t,
         Err(c) => return c,
     };
-    let mut times = Vec::with_capacity(n);
-    for i in 0..=n {
-        let mut it = Interp::new(&p.prog, false);
-        let t = Instant::now();
-        if let Err(e) = pool.call_main(&mut it) {
-            println!("{}", e.to_sexp());
-            return e.kind.exit_code();
-        }
-        if i > 0 {
-            times.push(t.elapsed().as_nanos()); // run 0 is warm-up
+    // 1, 2, 4, ... below `most`, then `most`.
+    let scaling = opts.iter().any(|o| o == "--scaling");
+    let counts: Vec<usize> = if scaling {
+        std::iter::successors(Some(1), |t| Some(t * 2)).take_while(|&t| t < most).chain([most]).collect()
+    } else {
+        vec![most]
+    };
+    let mut pools = Vec::with_capacity(counts.len());
+    for &t in &counts {
+        match pool(t) {
+            Ok(pool) => pools.push(pool),
+            Err(c) => return c,
         }
     }
-    times.sort_unstable();
-    let mean = times.iter().sum::<u128>() / n as u128;
-    let median = times[n / 2];
-    let mut s = format!(
-        "(bench\n  (file {})\n  (n {}) (threads {}) (contracts {})\n  (wall-ms :min {} :median {} :mean {} :max {})",
-        quote_str(path),
-        n,
-        pool.threads(),
-        p.contracts,
-        ms(times[0]),
-        ms(median),
-        ms(mean),
-        ms(times[n - 1])
-    );
+    // Round 0 is a warm-up. Each round runs every pool once, starting from
+    // the next one each time, so drift and a first-run penalty hit all.
+    let mut runs: Vec<Runs> =
+        pools.iter().map(|_| Runs { wall: Vec::with_capacity(n), cpu: profile::cpu_ns().map(|_| 0), forks: 0 }).collect();
+    for round in 0..=n {
+        for k in 0..pools.len() {
+            let i = (round + k) % pools.len();
+            let mut it = Interp::new(&p.prog, false);
+            let cpu0 = profile::cpu_ns();
+            let t = Instant::now();
+            if let Err(e) = pools[i].call_main(&mut it) {
+                println!("{}", e.to_sexp());
+                return e.kind.exit_code();
+            }
+            let wall = t.elapsed().as_nanos();
+            if round > 0 {
+                runs[i].wall.push(wall);
+                runs[i].cpu = runs[i].cpu.zip(cpu0).zip(profile::cpu_ns()).map(|((sum, a), b)| sum + b.saturating_sub(a));
+                runs[i].forks = it.prof.forks;
+            }
+        }
+    }
+    for r in &mut runs {
+        r.wall.sort_unstable();
+    }
+    let last = runs.last().expect("at least one thread count");
+    let median = last.median();
+    let mut s = format!("(bench\n  (file {})\n  (n {}) (threads {}) (contracts {})", quote_str(path), n, most, p.contracts);
+    if !scaling {
+        let times = &last.wall;
+        let mean = times.iter().sum::<u128>() / n as u128;
+        s += &format!("\n  (wall-ms :min {} :median {} :mean {} :max {})", ms(times[0]), ms(median), ms(mean), ms(times[n - 1]));
+    } else {
+        // Against this runtime on one thread, not the M1 interpreter.
+        let base = runs[0].median() as f64;
+        s += "\n  (scaling";
+        for (t, r) in counts.iter().zip(&runs) {
+            s += &format!("\n    (threads {} :median-ms {}", t, ms(r.median()));
+            if let Some(cpu) = r.cpu {
+                s += &format!(" :cpu-ms {}", ms(cpu / n as u128));
+            }
+            s += &format!(" :forks {}", r.forks);
+            if *t > 1 {
+                let speedup = base / r.median() as f64;
+                s += &format!(" :speedup {:.2} :efficiency {:.2}", speedup, speedup / *t as f64);
+            }
+            s += ")";
+        }
+        s += ")";
+    }
     let budget = p.prog.main().and_then(|m| m.budget.as_ref()).and_then(|b| b.wall_ms);
     let mut code = 0;
     if let Some(limit) = budget {
@@ -430,6 +472,22 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
     s += ")";
     println!("{}", s);
     code
+}
+
+/// The timed runs of one thread count.
+struct Runs {
+    wall: Vec<u128>,
+    /// CPU time of the process, summed over the runs; `None` where the
+    /// system does not report it. Idle workers of the other pools count too.
+    cpu: Option<u128>,
+    forks: u64,
+}
+
+impl Runs {
+    /// Of `wall` once sorted.
+    fn median(&self) -> u128 {
+        self.wall[self.wall.len() / 2]
+    }
 }
 
 fn spec_diff(old_path: &str, new_path: &str, opts: &[String]) -> i32 {
