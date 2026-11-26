@@ -8,7 +8,6 @@
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, HashMap};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use warrant::ast::{lower, Module};
 use warrant::contracts::{Checks, Mode};
@@ -25,6 +24,10 @@ thread_local! {
     /// Forks the parallel runs of this test thread made, so a test can see
     /// that it reached the parallel path.
     static FORKS: Cell<u64> = const { Cell::new(0) };
+    /// Set on the thread of `bless_golden` and on the threads it starts,
+    /// which record outcomes instead of checking them. Tests that run beside
+    /// it (`--include-ignored`) keep checking.
+    static BLESSING: Cell<bool> = const { Cell::new(false) };
 }
 
 struct Rng(u64);
@@ -218,26 +221,26 @@ fn counters(p: &warrant::profile::Profiler) -> String {
 const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/runtime_diff.golden");
 const BLESS: &str = "cargo test --test runtime_diff -- --ignored bless_golden";
 
-/// Set by `bless_golden`, which records outcomes instead of checking them.
-static BLESSING: AtomicBool = AtomicBool::new(false);
 static RECORDED: Mutex<BTreeMap<u64, String>> = Mutex::new(BTreeMap::new());
 
 fn golden() -> &'static HashMap<u64, String> {
     static LINES: OnceLock<HashMap<u64, String>> = OnceLock::new();
     LINES.get_or_init(|| {
         let text = std::fs::read_to_string(GOLDEN).unwrap_or_else(|e| panic!("{}: {}; run `{}`", GOLDEN, e, BLESS));
-        text.lines()
-            .map(|l| {
-                let (k, v) = l.split_once(' ').unwrap_or_else(|| panic!("bad line in {}: {}", GOLDEN, l));
-                (u64::from_str_radix(k, 16).unwrap_or_else(|_| panic!("bad key in {}: {}", GOLDEN, l)), v.to_string())
-            })
-            .collect()
+        let mut lines = HashMap::new();
+        for l in text.lines() {
+            let (k, v) = l.split_once(' ').unwrap_or_else(|| panic!("bad line in {}: {}", GOLDEN, l));
+            let k = u64::from_str_radix(k, 16).unwrap_or_else(|_| panic!("bad key in {}: {}", GOLDEN, l));
+            assert!(lines.insert(k, v.to_string()).is_none(), "key {:016x} twice in {}", k, GOLDEN);
+        }
+        lines
     })
 }
 
-/// FNV-1a of the contract mode and the source.
+/// FNV-1a of the contract mode and the source, with `\r\n` read as `\n`
+/// so a checkout with CRLF finds the same lines.
 fn key(mode: &str, src: &str) -> u64 {
-    [mode.as_bytes(), &[0], src.as_bytes()]
+    [mode.as_bytes(), &[0], src.replace("\r\n", "\n").as_bytes()]
         .concat()
         .iter()
         .fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3))
@@ -245,7 +248,7 @@ fn key(mode: &str, src: &str) -> u64 {
 
 fn expect(src: &str, mode: &str, got: &(Outcome, String)) {
     let (k, line) = (key(mode, src), format!("{:?}", got));
-    if BLESSING.load(Ordering::SeqCst) {
+    if BLESSING.with(Cell::get) {
         if let Some(old) = RECORDED.lock().unwrap().insert(k, line.clone()) {
             assert_eq!(old, line, "one program gave two outcomes:\n{}", src);
         }
@@ -257,7 +260,7 @@ fn expect(src: &str, mode: &str, got: &(Outcome, String)) {
         Some(want) => {
             assert_eq!(want, &line, "the runtime changed its outcome ({} contracts) on:\n{}\nonce decided, run `{}`", mode, src, BLESS)
         }
-        None => panic!("no outcome in {} ({} contracts) for:\n{}\nrun `{}`", GOLDEN, mode, src, BLESS),
+        None => panic!("no outcome in {} ({} contracts) for:\n{}\nadd the test to CASES and run `{}`", GOLDEN, mode, src, BLESS),
     }
 }
 
@@ -298,7 +301,16 @@ fn error(kind: &str, msg: &str, trace: &[&str]) -> Outcome {
 
 /// The runtime recurses on the Rust stack; the CLI gives it 1 GiB.
 fn on_big_stack(f: impl FnOnce() + Send + 'static) {
-    std::thread::Builder::new().stack_size(1 << 30).spawn(f).unwrap().join().unwrap();
+    let blessing = BLESSING.with(Cell::get);
+    std::thread::Builder::new()
+        .stack_size(1 << 30)
+        .spawn(move || {
+            BLESSING.with(|b| b.set(blessing));
+            f()
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -621,23 +633,38 @@ fn forks_stay_inside_the_pool() {
     });
 }
 
-/// Rewrites the golden file from what the runtime gives now. Run it alone,
-/// with the command in `BLESS`.
+#[test]
+fn a_crlf_checkout_finds_the_same_lines() {
+    assert_eq!(key("off", "(defn main [] -> i64\r\n  1)\r\n"), key("off", "(defn main [] -> i64\n  1)\n"));
+    assert_ne!(key("off", "(defn main [] -> i64 1)"), key("runtime", "(defn main [] -> i64 1)"));
+}
+
+/// Every test that calls `agree`; `bless_golden` runs them all.
+const CASES: &[fn()] = &[
+    examples_agree,
+    fixed_cases_agree,
+    shared_vectors_never_change,
+    a_partial_clause_mask_agrees,
+    generated_programs_agree,
+    cons_tail_recursion_agrees,
+    forked_arguments_fail_in_order,
+    effects_are_never_forked,
+    parallel_runs_repeat_exactly,
+];
+
+/// Rewrites the golden file from what the runtime gives now, with the
+/// command in `BLESS`.
 #[test]
 #[ignore = "rewrites tests/runtime_diff.golden"]
 fn bless_golden() {
-    BLESSING.store(true, Ordering::SeqCst);
-    for case in [
-        examples_agree,
-        fixed_cases_agree,
-        shared_vectors_never_change,
-        a_partial_clause_mask_agrees,
-        generated_programs_agree,
-        cons_tail_recursion_agrees,
-        forked_arguments_fail_in_order,
-        effects_are_never_forked,
-        parallel_runs_repeat_exactly,
-    ] {
+    // `--include-ignored` reaches here too; only the command in `BLESS`,
+    // which names this test, may write the file.
+    if !std::env::args().any(|a| a == "bless_golden") {
+        eprintln!("bless_golden writes only when named: `{}`", BLESS);
+        return;
+    }
+    BLESSING.with(|b| b.set(true));
+    for case in CASES {
         case();
     }
     let lines: String = RECORDED.lock().unwrap().iter().map(|(k, v)| format!("{:016x} {}\n", k, v)).collect();
