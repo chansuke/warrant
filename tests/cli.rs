@@ -459,11 +459,12 @@ fn bench_scaling_compares_each_thread_count_with_one() {
 /// A value that looks like a flag stays the value of its option.
 #[test]
 fn an_option_value_is_not_read_as_a_flag() {
-    let o = warrant(&["bench", "examples/msort.wrt", "--cache-dir", "--scaling", "-n", "1", "--threads", "2"]);
+    // `--contracts off` proves nothing, so no cache directory is made.
+    let o = warrant(&["bench", "examples/msort.wrt", "--cache-dir", "--scaling", "-n", "1", "--threads", "2", "--contracts", "off"]);
     assert_eq!(o.code, 0, "{}", o.stdout);
     assert!(!o.stdout.contains("(scaling"), "{}", o.stdout);
     assert!(o.stdout.contains("(wall-ms "), "{}", o.stdout);
-    let o = warrant(&["run", "examples/msort.wrt", "--cache-dir", "--report", "--threads", "--report"]);
+    let o = warrant(&["run", "examples/msort.wrt", "--cache-dir", "--report", "--threads", "--report", "--contracts", "off"]);
     assert_eq!(o.code, 2, "{}", o.stdout);
     assert!(o.stdout.starts_with("(error :kind usage :msg \"--threads must be a positive integer\")"), "{}", o.stdout);
 }
