@@ -96,8 +96,27 @@ fn check_opts(cmd: &str, opts: &[String]) -> Result<(), i32> {
     Ok(())
 }
 
+/// Each option with its value, read the way `check_opts` reads them, so a
+/// value that looks like an option (`--cache-dir --scaling`) stays a value.
+fn parsed(opts: &[String]) -> Vec<(&str, Option<&str>)> {
+    let tables = [PROOF_OPTS, RUN_OPTS, BENCH_OPTS, FMT_OPTS, SPEC_DIFF_OPTS];
+    let takes_value = |o: &str| tables.iter().flat_map(|t| t.iter()).any(|(name, v)| *name == o && *v);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < opts.len() {
+        let value = if takes_value(&opts[i]) { opts.get(i + 1).map(String::as_str) } else { None };
+        out.push((opts[i].as_str(), value));
+        i += if value.is_some() { 2 } else { 1 };
+    }
+    out
+}
+
 fn opt_value<'a>(opts: &'a [String], key: &str) -> Option<&'a str> {
-    opts.iter().position(|o| o == key).and_then(|i| opts.get(i + 1)).map(|s| s.as_str())
+    parsed(opts).into_iter().find(|(name, _)| *name == key).and_then(|(_, v)| v)
+}
+
+fn flag(opts: &[String], key: &str) -> bool {
+    parsed(opts).iter().any(|(name, v)| *name == key && v.is_none())
 }
 
 /// Prints `(error :kind K :msg M)` and returns the exit code `K` stands for.
@@ -186,7 +205,7 @@ impl Prover {
         let timeout_ms = positive(opts, "--timeout-ms", 2000)?;
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as u64;
         let jobs = positive(opts, "--jobs", cores)? as usize;
-        let cache = if opts.iter().any(|o| o == "--no-cache") {
+        let cache = if flag(opts, "--no-cache") {
             None
         } else {
             opt_value(opts, "--cache-dir").map(std::path::PathBuf::from).or_else(default_cache_dir).map(Cache::new)
@@ -216,7 +235,7 @@ struct Prepared {
 /// Static checks, then the contract plan. Effects are always checked;
 /// `--no-typecheck` skips types, and with them the proofs `auto` relies on.
 fn prepare(m: &Module, opts: &[String]) -> Result<Prepared, i32> {
-    let has = |f: &str| opts.iter().any(|o| o == f);
+    let has = |f: &str| flag(opts, f);
     let mode = match (opt_value(opts, "--contracts"), has("--no-contracts")) {
         (None, true) => Mode::Off,
         (None, false) => Mode::Auto,
@@ -358,7 +377,7 @@ fn run(path: &str, src: &Source, m: &Module, opts: &[String]) -> i32 {
         Ok(pool) => pool,
         Err(c) => return c,
     };
-    let report = opts.iter().any(|o| o == "--report");
+    let report = flag(opts, "--report");
     let mut it = Interp::new(&p.prog, report);
     let cpu0 = profile::cpu_ns();
     let t = Instant::now();
@@ -397,7 +416,7 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
         Err(c) => return c,
     };
     // 1, 2, 4, ... below `most`, then `most`.
-    let scaling = opts.iter().any(|o| o == "--scaling");
+    let scaling = flag(opts, "--scaling");
     let counts: Vec<usize> = if scaling {
         std::iter::successors(Some(1), |t| Some(t * 2)).take_while(|&t| t < most).chain([most]).collect()
     } else {
@@ -502,7 +521,7 @@ fn spec_diff(old_path: &str, new_path: &str, opts: &[String]) -> i32 {
         Ok(t) => t,
         Err(c) => return c,
     };
-    let z3 = if opts.iter().any(|o| o == "--no-smt") { None } else { Z3::find(timeout_ms) };
+    let z3 = if flag(opts, "--no-smt") { None } else { Z3::find(timeout_ms) };
     let d = specdiff::diff(&modules[0], &modules[1], z3.as_ref().map(|z| z as &dyn warrant::solver::Solver));
     println!("{}", d.to_sexp(old_path, new_path));
     if d.weakened() {
