@@ -424,12 +424,33 @@ fn bench_scaling_compares_each_thread_count_with_one() {
     assert_eq!(o.code, 0, "{}", o.stdout);
     let got = rows(&o.stdout);
     assert_eq!(got.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["1", "2", "4", "5"], "{}", o.stdout);
+    // `:cpu-ms` is there where Linux reports CPU time.
+    let cpu = std::path::Path::new("/proc/self/task").exists();
     for (t, keys) in &got {
-        let want: &[&str] =
-            if t == "1" { &["median-ms", "cpu-ms", "forks"] } else { &["median-ms", "cpu-ms", "forks", "speedup", "efficiency"] };
-        assert_eq!(keys, want, "{}", o.stdout);
+        let mut want = vec!["median-ms", "cpu-ms", "forks", "speedup", "efficiency"];
+        if !cpu {
+            want.retain(|k| *k != "cpu-ms");
+        }
+        if t == "1" {
+            want.truncate(want.len() - 2);
+        }
+        assert_eq!(keys, &want, "{}", o.stdout);
     }
-    assert!(o.stdout.contains("(budget :wall-ms 500 "), "{}", o.stdout);
+    // The ratios follow from the medians, and the budget reads the last row.
+    let num = |line: &str, key: &str| -> f64 {
+        let at = line.find(key).unwrap_or_else(|| panic!("no {} in {}", key, line)) + key.len();
+        line[at..].split([' ', ')']).next().and_then(|w| w.parse().ok()).unwrap_or_else(|| panic!("{} in {}", key, line))
+    };
+    let lines: Vec<&str> = o.stdout.lines().map(str::trim).filter(|l| l.starts_with("(threads ")).collect();
+    let base = num(lines[0], ":median-ms ");
+    for (line, t) in lines.iter().zip([1.0, 2.0, 4.0, 5.0]).skip(1) {
+        let speedup = num(line, ":speedup ");
+        assert!((speedup - base / num(line, ":median-ms ")).abs() < 0.02, "{}", o.stdout);
+        assert!((num(line, ":efficiency ") - speedup / t).abs() < 0.01, "{}", o.stdout);
+    }
+    let budget = o.stdout.lines().find(|l| l.contains("(budget ")).unwrap_or_else(|| panic!("no budget: {}", o.stdout));
+    assert!(budget.contains("(budget :wall-ms 500 "), "{}", o.stdout);
+    assert_eq!(num(budget, ":median-ms "), num(lines[3], ":median-ms "), "{}", o.stdout);
     let o = warrant(&["bench", "examples/msort.wrt", "-n", "1", "--threads", "1", "--scaling"]);
     assert_eq!(o.code, 0, "{}", o.stdout);
     assert_eq!(rows(&o.stdout).len(), 1, "{}", o.stdout);

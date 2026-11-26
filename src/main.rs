@@ -48,7 +48,8 @@ const USAGE: &str = "usage: warrant <command> FILE [options]
   fmt   FILE [--to wisp|sexp]                    convert between canonical S-expr and the Wisp view
   bench FILE [-n N] [--contracts auto|runtime|off] [--no-typecheck] [--threads N] [--scaling]
                                                  time main N times; enforce (:budget (wall-ms N)) on main
-                                                 --scaling: time 1, 2, 4, ... and N threads in turn
+                                                 --scaling: time 1, 2, 4, ... and N threads in turn;
+                                                 the pools stay up together, about 2N threads
   spec-diff OLD NEW [--no-smt] [--timeout-ms N]  list spec changes; exit 1 if a contract was weakened
 Proof options (check, and run/bench with --contracts auto, the default):
   --timeout-ms N (per VC, default 2000)  --jobs N (default: all cores)  --no-cache
@@ -431,11 +432,13 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
     }
     // Round 0 is a warm-up. Each round runs every pool once, starting from
     // the next one each time, so drift and a first-run penalty hit all.
+    // Odd rounds go backwards, so no pool always runs right after the same
+    // other one.
     let mut runs: Vec<Runs> =
         pools.iter().map(|_| Runs { wall: Vec::with_capacity(n), cpu: profile::cpu_ns().map(|_| 0), forks: 0 }).collect();
     for round in 0..=n {
         for k in 0..pools.len() {
-            let i = (round + k) % pools.len();
+            let i = if round % 2 == 0 { (round + k) % pools.len() } else { (round + pools.len() - k) % pools.len() };
             let mut it = Interp::new(&p.prog, false);
             let cpu0 = profile::cpu_ns();
             let t = Instant::now();
@@ -471,7 +474,8 @@ fn bench(path: &str, m: &Module, opts: &[String]) -> i32 {
                 s += &format!(" :cpu-ms {}", ms(cpu / n as u128));
             }
             s += &format!(" :forks {}", r.forks);
-            if *t > 1 {
+            // A run shorter than a clock tick has no ratio.
+            if *t > 1 && base > 0.0 && r.median() > 0 {
                 let speedup = base / r.median() as f64;
                 s += &format!(" :speedup {:.2} :efficiency {:.2}", speedup, speedup / *t as f64);
             }
@@ -499,6 +503,7 @@ struct Runs {
     /// CPU time of the process, summed over the runs; `None` where the
     /// system does not report it. Idle workers of the other pools count too.
     cpu: Option<u128>,
+    /// Forks of the last timed run; a pool forks the same calls every run.
     forks: u64,
 }
 
