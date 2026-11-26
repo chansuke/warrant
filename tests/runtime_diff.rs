@@ -1,11 +1,15 @@
-//! Differential test of the IR runtime (`rt`) against the M1 interpreter
-//! (`eval`): every program must give the same printed value, or the same
-//! error kind, message and trace. Programs come from a fixed-seed generator
-//! that leans on what the two evaluators do differently: frame slots,
-//! captures, shadowing, closures, contracts, effects and dynamic type errors.
+//! Differential test of the IR runtime (`rt`): every program must give, on
+//! one thread and on four, the printed value or the error kind, message and
+//! trace, and the counters, that `tests/runtime_diff.golden` holds. That file
+//! is what the runtime gave when M2-7 removed the M1 interpreter, which agreed
+//! with every line of it. Programs come from a fixed-seed generator that leans
+//! on what a compiler can get wrong: frame slots, captures, shadowing,
+//! closures, contracts, effects and dynamic type errors.
 
 use std::cell::Cell;
-use std::sync::OnceLock;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use warrant::ast::{lower, Module};
 use warrant::contracts::{Checks, Mode};
 use warrant::rt::Pool;
@@ -198,9 +202,9 @@ fn module(src: &str) -> Module {
 
 type Outcome = Result<String, (String, String, Vec<String>)>;
 
-/// Counters both runtimes keep, compared on errors too. Printed output is
-/// not compared: both write it to stdout directly. `vec-allocs` and
-/// `vec-elems` differ on purpose: the IR runtime shares and reuses buffers.
+/// Counters that match a run in order, compared on errors too. Printed
+/// output is not compared: it goes to stdout directly. `vec-allocs` and
+/// `vec-elems` are left out: they differ with the thread count (D30).
 fn counters(p: &warrant::profile::Profiler) -> String {
     let clauses: std::collections::BTreeMap<_, _> = p.clauses.iter().map(|(k, v)| (k.clone(), v.checks)).collect();
     format!(
@@ -209,11 +213,52 @@ fn counters(p: &warrant::profile::Profiler) -> String {
     )
 }
 
-fn run_m1(m: &Module, checks: &Checks) -> (Outcome, String) {
-    let prog = warrant::eval::Program::new(m, checks);
-    let mut it = warrant::eval::Interp::new(&prog, true);
-    let r = it.call_main().map(|v| warrant::eval::show(&v)).map_err(|e| (e.kind.to_string(), e.msg, e.trace));
-    (r, counters(&it.prof))
+/// One line per program and contract mode: a hash of both, then the outcome
+/// and the counters.
+const GOLDEN: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/runtime_diff.golden");
+const BLESS: &str = "cargo test --test runtime_diff -- --ignored bless_golden";
+
+/// Set by `bless_golden`, which records outcomes instead of checking them.
+static BLESSING: AtomicBool = AtomicBool::new(false);
+static RECORDED: Mutex<BTreeMap<u64, String>> = Mutex::new(BTreeMap::new());
+
+fn golden() -> &'static HashMap<u64, String> {
+    static LINES: OnceLock<HashMap<u64, String>> = OnceLock::new();
+    LINES.get_or_init(|| {
+        let text = std::fs::read_to_string(GOLDEN).unwrap_or_else(|e| panic!("{}: {}; run `{}`", GOLDEN, e, BLESS));
+        text.lines()
+            .map(|l| {
+                let (k, v) = l.split_once(' ').unwrap_or_else(|| panic!("bad line in {}: {}", GOLDEN, l));
+                (u64::from_str_radix(k, 16).unwrap_or_else(|_| panic!("bad key in {}: {}", GOLDEN, l)), v.to_string())
+            })
+            .collect()
+    })
+}
+
+/// FNV-1a of the contract mode and the source.
+fn key(mode: &str, src: &str) -> u64 {
+    [mode.as_bytes(), &[0], src.as_bytes()]
+        .concat()
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3))
+}
+
+fn expect(src: &str, mode: &str, got: &(Outcome, String)) {
+    let (k, line) = (key(mode, src), format!("{:?}", got));
+    if BLESSING.load(Ordering::SeqCst) {
+        if let Some(old) = RECORDED.lock().unwrap().insert(k, line.clone()) {
+            assert_eq!(old, line, "one program gave two outcomes:\n{}", src);
+        }
+        return;
+    }
+    // A change here changes what a program means: decide it first (AGENTS.md),
+    // then run `bless_golden` and read the diff of the file.
+    match golden().get(&k) {
+        Some(want) => {
+            assert_eq!(want, &line, "the runtime changed its outcome ({} contracts) on:\n{}\nonce decided, run `{}`", mode, src, BLESS)
+        }
+        None => panic!("no outcome in {} ({} contracts) for:\n{}\nrun `{}`", GOLDEN, mode, src, BLESS),
+    }
 }
 
 fn run_ir(m: &Module, checks: &Checks) -> (Outcome, String) {
@@ -228,22 +273,22 @@ fn run_ir_on(m: &Module, checks: &Checks, pool: &Pool) -> (Outcome, String) {
     (r, counters(&it.prof))
 }
 
-/// The M1 interpreter, the IR runtime on one thread, and the IR runtime on
-/// four threads give the same value or error, trace and counters.
-fn agree(src: &str, m: &Module, checks: &Checks) -> Outcome {
-    let (old, new) = (run_m1(m, checks), run_ir(m, checks));
-    assert_eq!(old, new, "the runtimes disagree on:\n{}", src);
+/// The IR runtime on one thread and on four threads give the value or
+/// error, trace and counters the golden file holds.
+fn agree(src: &str, m: &Module, checks: &Checks, mode: &str) -> Outcome {
+    let new = run_ir(m, checks);
     let parallel = run_ir_on(m, checks, threads());
     assert_eq!(new, parallel, "the parallel run differs on:\n{}", src);
+    expect(src, mode, &new);
     new.0
 }
 
-/// The outcome with every contract checked, after checking that the
-/// runtimes agree with contracts both on and off.
+/// The outcome with every contract checked, after checking the runs with
+/// contracts both on and off.
 fn same(src: &str) -> Outcome {
     let m = module(src);
-    let on = agree(src, &m, &Checks::new(&m, Mode::Runtime, None));
-    let _ = agree(src, &m, &Checks::new(&m, Mode::Off, None));
+    let on = agree(src, &m, &Checks::new(&m, Mode::Runtime, None), "runtime");
+    let _ = agree(src, &m, &Checks::new(&m, Mode::Off, None), "off");
     on
 }
 
@@ -251,7 +296,7 @@ fn error(kind: &str, msg: &str, trace: &[&str]) -> Outcome {
     Err((kind.into(), msg.into(), trace.iter().map(|s| s.to_string()).collect()))
 }
 
-/// Both interpreters recurse on the Rust stack; the CLI gives them 1 GiB.
+/// The runtime recurses on the Rust stack; the CLI gives it 1 GiB.
 fn on_big_stack(f: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new().stack_size(1 << 30).spawn(f).unwrap().join().unwrap();
 }
@@ -295,7 +340,8 @@ fn fixed_cases_agree() {
 
 /// The IR runtime updates a vector in place only when nothing else refers to
 /// its buffer. Each case shares a buffer one way and then writes through one
-/// of the sharers; the M1 interpreter, which always copies, is the reference.
+/// of the sharers. The golden outcomes came from the M1 interpreter, which
+/// always copied.
 #[test]
 fn shared_vectors_never_change() {
     on_big_stack(|| {
@@ -339,7 +385,7 @@ fn a_partial_clause_mask_agrees() {
         let m = module(src);
         let mut checks = Checks::new(&m, Mode::Runtime, None);
         checks.ensures[m.index["f"]] = vec![false, true];
-        assert_eq!(agree(src, &m, &checks).unwrap(), "9");
+        assert_eq!(agree(src, &m, &checks, "partial").unwrap(), "9");
         let (_, counted) = run_ir(&m, &checks);
         assert!(counted.contains("contract-checks 2") && counted.contains("(\"f\", \"ensures\", 1): 1"), "{}", counted);
     });
@@ -359,7 +405,7 @@ fn generated_programs_agree() {
         let forks = FORKS.with(Cell::get);
         eprintln!("ok {} errors {:?} forks {}", ok, kinds, forks);
         assert!(forks >= 100, "the generator reached the parallel path {} times", forks);
-        // The generator must reach values and the error kinds the runtimes raise.
+        // The generator must reach values and the error kinds the runtime raises.
         assert!(ok >= 300, "ok {} errors {:?}", ok, kinds);
         for k in ["type", "overflow", "bounds", "div-zero", "effect", "contract"] {
             assert!(kinds.get(k).copied().unwrap_or(0) >= 10, "too few {} errors: {:?}", k, kinds);
@@ -573,4 +619,27 @@ fn forks_stay_inside_the_pool() {
         assert!(it.call_main().is_ok());
         assert_eq!(it.prof.forks, forks);
     });
+}
+
+/// Rewrites the golden file from what the runtime gives now. Run it alone,
+/// with the command in `BLESS`.
+#[test]
+#[ignore = "rewrites tests/runtime_diff.golden"]
+fn bless_golden() {
+    BLESSING.store(true, Ordering::SeqCst);
+    for case in [
+        examples_agree,
+        fixed_cases_agree,
+        shared_vectors_never_change,
+        a_partial_clause_mask_agrees,
+        generated_programs_agree,
+        cons_tail_recursion_agrees,
+        forked_arguments_fail_in_order,
+        effects_are_never_forked,
+        parallel_runs_repeat_exactly,
+    ] {
+        case();
+    }
+    let lines: String = RECORDED.lock().unwrap().iter().map(|(k, v)| format!("{:016x} {}\n", k, v)).collect();
+    std::fs::write(GOLDEN, lines).unwrap();
 }

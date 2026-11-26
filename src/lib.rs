@@ -1,6 +1,7 @@
-//! Warrant M0: canonical S-expression syntax, Wisp-style human view,
-//! a reference interpreter with runtime-checked contracts and effects,
-//! and a machine-readable profiler.
+//! Warrant: canonical S-expression syntax, Wisp-style human view, static
+//! types and effects, contracts proved with z3 or checked at run time, a
+//! compiled runtime that runs pure calls in parallel, and a machine-readable
+//! profiler.
 
 // stdout belongs to the CLI in main.rs, whose every line is an S-expression,
 // and a library error is a value, not a panic without a reason.
@@ -12,7 +13,6 @@ pub mod cache;
 pub mod contracts;
 pub mod diag;
 pub mod effects;
-pub mod eval;
 pub mod ir;
 pub mod profile;
 pub mod rt;

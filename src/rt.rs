@@ -1,6 +1,6 @@
 //! The M2 interpreter: evaluates `ir::Program`. Values and errors mean what
-//! they meant in the M1 interpreter (`eval.rs`), which stays as the oracle
-//! of the differential tests until M2-7.
+//! they meant in the M1 interpreter, which M2-7 removed; the outcomes it
+//! agreed with are in `tests/runtime_diff.golden`.
 //!
 //! Contracts are the clauses `ir::Program` compiled in. Effects are checked
 //! dynamically and transitively: `print` fails if any function on the call

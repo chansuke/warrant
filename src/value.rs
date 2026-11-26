@@ -207,3 +207,13 @@ impl Vector {
         (Vector::new(buf), Copied { alloc: true, elems: len })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// D21: the SMT encoding assumes no vector is longer than `MAX_LEN`.
+    #[test]
+    fn smt_vector_length_bound_covers_every_allocatable_vector() {
+        let most = isize::MAX as u64 / std::mem::size_of::<super::Value>() as u64;
+        assert!(most <= crate::smt::MAX_LEN as u64, "{} > {}", most, crate::smt::MAX_LEN);
+    }
+}
