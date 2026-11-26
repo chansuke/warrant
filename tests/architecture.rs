@@ -23,8 +23,6 @@ const LAYERS: &[&[&str]] = &[
     &["specdiff", "ir"],
     &["value"],
     &["rt"],
-    // The M1 interpreter, kept as the oracle of tests/runtime_diff.rs until M2-7.
-    &["eval"],
 ];
 
 #[test]
