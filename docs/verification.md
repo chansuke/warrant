@@ -42,7 +42,7 @@ when its code is gone or a test now catches the mistake on its own.
 
 ### No input makes warrant panic
 
-- Paths: `src/sexp.rs`, `src/wisp.rs`, `src/ast.rs`, `src/types.rs`, `src/rt.rs`, `src/value.rs`, `src/eval.rs`
+- Paths: `src/sexp.rs`, `src/wisp.rs`, `src/ast.rs`, `src/types.rs`, `src/rt.rs`, `src/value.rs`
 - Check: Deep nesting, huge numbers, impossible ranges and sizes end in an
   `(error ...)`, not a panic or a stack overflow. Add the shape to the
   generators in `tests/properties.rs` or a case to `tests/cli.rs`.
@@ -63,10 +63,10 @@ when its code is gone or a test now catches the mistake on its own.
 ### A new builtin works in every pass
 
 - Paths: `src/builtin.rs`
-- Check: Implement it in `rt.rs`, and in `eval.rs` until M2-7 removes it.
-  Fill every match the compiler points to (types, effects, VC generation).
-  Add a case to `tests/runtime_diff.rs` so the runtime and the M1 oracle
-  agree, including on errors.
+- Check: Implement it in `rt.rs`. Fill every match the compiler points to
+  (types, effects, VC generation). Add a case to `tests/runtime_diff.rs`,
+  including errors, run its `bless_golden`, and check each new line of
+  `tests/runtime_diff.golden` by hand: the golden file is the oracle now.
 - Incidents: `3d88aeb` (`all?`), `23719f9` (`perm?`).
 
 ### Performance changes carry a measurement
