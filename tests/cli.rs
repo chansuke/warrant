@@ -403,3 +403,68 @@ fn threads_must_be_a_positive_count() {
     assert_eq!(o.code, 0, "{}", o.stdout);
     assert!(o.stdout.contains("(threads 2)"), "{}", o.stdout);
 }
+
+/// `bench --scaling` times 1, 2, 4, ... threads and `--threads N` itself,
+/// and compares each with this runtime on one thread.
+#[test]
+fn bench_scaling_compares_each_thread_count_with_one() {
+    // `sexp::parse_all` reads no decimals, so the rows are read as text.
+    let rows = |out: &str| -> Vec<(String, Vec<String>)> {
+        let body = out.split("(scaling").nth(1).unwrap_or_else(|| panic!("no scaling: {}", out));
+        body.lines()
+            .map(str::trim)
+            .filter(|l| l.starts_with("(threads "))
+            .map(|l| {
+                let words: Vec<&str> = l.split([' ', '(', ')']).filter(|w| !w.is_empty()).collect();
+                (words[1].to_string(), words.iter().filter_map(|w| w.strip_prefix(':')).map(str::to_string).collect())
+            })
+            .collect()
+    };
+    let o = warrant(&["bench", "examples/msort.wrt", "-n", "2", "--threads", "5", "--scaling"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    let got = rows(&o.stdout);
+    assert_eq!(got.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["1", "2", "4", "5"], "{}", o.stdout);
+    // `:cpu-ms` is there where Linux reports CPU time.
+    let cpu = std::path::Path::new("/proc/self/task").exists();
+    for (t, keys) in &got {
+        let mut want = vec!["median-ms", "cpu-ms", "forks", "speedup", "efficiency"];
+        if !cpu {
+            want.retain(|k| *k != "cpu-ms");
+        }
+        if t == "1" {
+            want.truncate(want.len() - 2);
+        }
+        assert_eq!(keys, &want, "{}", o.stdout);
+    }
+    // The ratios follow from the medians, and the budget reads the last row.
+    let num = |line: &str, key: &str| -> f64 {
+        let at = line.find(key).unwrap_or_else(|| panic!("no {} in {}", key, line)) + key.len();
+        line[at..].split([' ', ')']).next().and_then(|w| w.parse().ok()).unwrap_or_else(|| panic!("{} in {}", key, line))
+    };
+    let lines: Vec<&str> = o.stdout.lines().map(str::trim).filter(|l| l.starts_with("(threads ")).collect();
+    let base = num(lines[0], ":median-ms ");
+    for (line, t) in lines.iter().zip([1.0, 2.0, 4.0, 5.0]).skip(1) {
+        let speedup = num(line, ":speedup ");
+        assert!((speedup - base / num(line, ":median-ms ")).abs() < 0.02, "{}", o.stdout);
+        assert!((num(line, ":efficiency ") - speedup / t).abs() < 0.01, "{}", o.stdout);
+    }
+    let budget = o.stdout.lines().find(|l| l.contains("(budget ")).unwrap_or_else(|| panic!("no budget: {}", o.stdout));
+    assert!(budget.contains("(budget :wall-ms 500 "), "{}", o.stdout);
+    assert_eq!(num(budget, ":median-ms "), num(lines[3], ":median-ms "), "{}", o.stdout);
+    let o = warrant(&["bench", "examples/msort.wrt", "-n", "1", "--threads", "1", "--scaling"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert_eq!(rows(&o.stdout).len(), 1, "{}", o.stdout);
+}
+
+/// A value that looks like a flag stays the value of its option.
+#[test]
+fn an_option_value_is_not_read_as_a_flag() {
+    // `--contracts off` proves nothing, so no cache directory is made.
+    let o = warrant(&["bench", "examples/msort.wrt", "--cache-dir", "--scaling", "-n", "1", "--threads", "2", "--contracts", "off"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    assert!(!o.stdout.contains("(scaling"), "{}", o.stdout);
+    assert!(o.stdout.contains("(wall-ms "), "{}", o.stdout);
+    let o = warrant(&["run", "examples/msort.wrt", "--cache-dir", "--report", "--threads", "--report", "--contracts", "off"]);
+    assert_eq!(o.code, 2, "{}", o.stdout);
+    assert!(o.stdout.starts_with("(error :kind usage :msg \"--threads must be a positive integer\")"), "{}", o.stdout);
+}

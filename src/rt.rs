@@ -18,9 +18,11 @@ use std::time::Instant;
 
 const MAX_DEPTH: usize = 200_000;
 
-/// Forks nest up to `log2(threads)` plus this many levels; deeper ones run
-/// in their task (D30). M2-6 measures it.
-const FORK_SLACK: usize = 2;
+/// Forks nest up to `log2(threads)`, rounded up, plus this many levels; deeper ones run
+/// in their task (D30). The extra levels give work stealing pieces to even
+/// out an uneven split; past about 10 the forks cost more than they even out
+/// (D31).
+const FORK_SLACK: usize = 10;
 
 /// The threads a run uses. One runs on the calling thread and never forks.
 pub struct Pool(Option<rayon::ThreadPool>);
