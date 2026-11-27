@@ -20,6 +20,9 @@ debug = 1
 
 # Every target. clippy.toml lists the disallowed methods and why; src/lib.rs
 # adds the lints that hold only for the library.
+[lints.rust]
+unsafe_code = "forbid"
+
 [lints.clippy]
 dbg_macro = "deny"
 todo = "deny"

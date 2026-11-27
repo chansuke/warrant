@@ -9,7 +9,6 @@
 
 use crate::builtin::Builtin;
 use crate::ir::Lambda;
-use std::mem::ManuallyDrop;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -63,6 +62,12 @@ fn free_nested(values: &mut Vec<Value>) {
     }
 }
 
+/// The buffer of a vector when no other value refers to it. It takes the field, not a
+/// method on `Vector`, so the caller can still move the window while it writes.
+fn unique(buf: &mut Option<Arc<Vec<Value>>>) -> Option<&mut Vec<Value>> {
+    buf.as_mut().and_then(Arc::get_mut)
+}
+
 /// Fills dead buffer slots.
 const DEAD: Value = Value::Bool(false);
 
@@ -70,8 +75,9 @@ const DEAD: Value = Value::Bool(false);
 pub struct Vector {
     /// Released only through `Arc::into_inner` (`take_buf`), so of the
     /// owners that drop it, exactly one gets the elements, even when they
-    /// drop at once on different threads.
-    buf: ManuallyDrop<Arc<Vec<Value>>>,
+    /// drop at once on different threads. `None` only once taken, in
+    /// `drop` or `take_buf`.
+    buf: Option<Arc<Vec<Value>>>,
     start: usize,
     len: usize,
 }
@@ -89,9 +95,7 @@ impl Copied {
 
 impl Drop for Vector {
     fn drop(&mut self) {
-        // SAFETY: `buf` is not used again; `drop` runs once.
-        let buf = unsafe { ManuallyDrop::take(&mut self.buf) };
-        if let Some(mut elems) = Arc::into_inner(buf) {
+        if let Some(mut elems) = self.buf.take().and_then(Arc::into_inner) {
             free_nested(&mut elems);
         }
     }
@@ -100,19 +104,21 @@ impl Drop for Vector {
 impl Vector {
     /// Gives up this reference to the buffer without running `drop`, and
     /// returns the elements if it was the last one.
-    pub(crate) fn take_buf(self) -> Option<Vec<Value>> {
-        let mut me = ManuallyDrop::new(self);
-        // SAFETY: `me` is never dropped, so `buf` is taken exactly once.
-        Arc::into_inner(unsafe { ManuallyDrop::take(&mut me.buf) })
+    pub(crate) fn take_buf(mut self) -> Option<Vec<Value>> {
+        self.buf.take().and_then(Arc::into_inner)
     }
 
     pub fn new(items: Vec<Value>) -> Vector {
         let len = items.len();
-        Vector { buf: ManuallyDrop::new(Arc::new(items)), start: 0, len }
+        Vector { buf: Some(Arc::new(items)), start: 0, len }
+    }
+
+    fn buf(&self) -> &[Value] {
+        self.buf.as_deref().map_or(&[], Vec::as_slice)
     }
 
     pub fn as_slice(&self) -> &[Value] {
-        &self.buf[self.start..self.start + self.len]
+        &self.buf()[self.start..self.start + self.len]
     }
 
     pub fn len(&self) -> usize {
@@ -125,7 +131,7 @@ impl Vector {
 
     /// The caller has checked that `self` is not empty.
     pub fn rest(mut self) -> (Vector, Copied) {
-        if let Some(buf) = Arc::get_mut(&mut self.buf) {
+        if let Some(buf) = unique(&mut self.buf) {
             buf[self.start] = DEAD;
         }
         self.start += 1;
@@ -144,7 +150,7 @@ impl Vector {
     /// Each copy at least quarters the buffer, so the copies a run of
     /// narrowings makes add up to less than the original buffer.
     fn compacted(self) -> (Vector, Copied) {
-        if self.len * 4 >= self.buf.len() {
+        if self.len * 4 >= self.buf().len() {
             return (self, Copied::NOTHING);
         }
         let v = Vector::new(self.as_slice().to_vec());
@@ -153,7 +159,7 @@ impl Vector {
 
     pub fn cons(mut self, x: Value) -> (Vector, Copied) {
         if self.start > 0 {
-            if let Some(buf) = Arc::get_mut(&mut self.buf) {
+            if let Some(buf) = unique(&mut self.buf) {
                 self.start -= 1;
                 buf[self.start] = x;
                 self.len += 1;
@@ -164,7 +170,7 @@ impl Vector {
         // run of conses copies O(1) elements each on average.
         let mut v = self.with_room(self.len.max(1));
         let copied = Copied { alloc: true, elems: v.len + 1 };
-        let buf = Arc::get_mut(&mut v.buf).expect("just copied");
+        let buf = unique(&mut v.buf).expect("just copied");
         v.start -= 1;
         buf[v.start] = x;
         v.len += 1;
@@ -176,25 +182,25 @@ impl Vector {
         let mut buf = Vec::with_capacity(room + self.len);
         buf.resize(room, DEAD);
         buf.extend_from_slice(self.as_slice());
-        Vector { buf: ManuallyDrop::new(Arc::new(buf)), start: room, len: self.len }
+        Vector { buf: Some(Arc::new(buf)), start: room, len: self.len }
     }
 
     pub fn concat(mut self, mut other: Vector) -> (Vector, Copied) {
         // Write the shorter side into a buffer nothing else refers to:
         // `(concat acc [x])` appends to `acc`, `(concat [x] acc)` prepends.
-        if self.len < other.len && Arc::get_mut(&mut other.buf).is_some() {
+        if self.len < other.len && unique(&mut other.buf).is_some() {
             let mut copied = Copied { alloc: false, elems: self.len };
             if other.start < self.len {
                 other = other.with_room(self.len + other.len);
                 copied = Copied { alloc: true, elems: self.len + other.len };
             }
-            let buf = Arc::get_mut(&mut other.buf).expect("unique, or just copied");
+            let buf = unique(&mut other.buf).expect("unique, or just copied");
             other.start -= self.len;
             buf[other.start..other.start + self.len].clone_from_slice(self.as_slice());
             other.len += self.len;
             return (other, copied);
         }
-        if let Some(buf) = Arc::get_mut(&mut self.buf) {
+        if let Some(buf) = unique(&mut self.buf) {
             buf.truncate(self.start + self.len);
             buf.extend_from_slice(other.as_slice());
             self.len += other.len;
