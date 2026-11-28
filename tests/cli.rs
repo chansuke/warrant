@@ -158,6 +158,28 @@ fn auto_erases_proved_clauses_and_keeps_the_rest() {
     assert_eq!(o.code, 2, "{}", o.stdout);
 }
 
+/// The VC for `(pos y)` comes from `(g 5)`, the one call of `g` the prover
+/// sees; `app` calls `g` with -5. Every VC is proved, so only the erased
+/// check could stop the call.
+const CLOSURE_CALL: &str = "(defn pos [x : i64] -> i64 (:effects []) (:requires (> x 0)) (:ensures (> result 0)) x)
+(defn app [f : (Fn [i64] i64) y : i64] -> i64 (:effects []) (f y))
+(defn main [] -> i64 (:effects [])
+  (let [g (fn [y] (pos y))] (do (g 5) (app g -5))))
+";
+
+#[test]
+fn auto_keeps_the_precondition_of_a_function_called_from_a_closure() {
+    if !have_z3() {
+        return;
+    }
+    let path = source("closure_call.wrt", CLOSURE_CALL);
+    let o = warrant(&["check", &path, "--no-cache"]);
+    assert_eq!(o.code, 0, "{}", o.stdout);
+    let o = warrant(&["run", &path, "--no-cache"]);
+    assert_eq!(o.code, 1, "{}", o.stdout);
+    assert!(o.stdout.contains("requires failed in pos: (> x 0)"), "{}", o.stdout);
+}
+
 #[test]
 fn auto_still_catches_an_ensures_it_could_not_prove() {
     if !have_z3() {

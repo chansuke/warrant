@@ -106,7 +106,7 @@ warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 
 `check` は型検査が通れば VC を生成して Z3 で証明する。出力は `(smt :status ok|failed :vcs N :proved P :failed F :unknown U :unsupported X :ms T :issues (...))` で、証明できなかった VC を `(vc :fn F :kind K :at (line L col C) :status failed :counterexample (xs [...]))` の形で列挙する。VC は `--jobs` 個（既定は論理コア数）の z3 を並列に動かして解く。結果は VC ごとにユーザーのキャッシュディレクトリ（既定 `~/.cache/warrant/proofs`、D23）にキャッシュし、`:cached C` と、今回ソルバにかけた関数 `:reproved (...)`、遅い順の3件 `:slowest ((fn kind ms) ...)` を出す。VC が1つでも failed なら終了コード 1。unknown（タイムアウト、既定 2 秒）と unsupported（入れ子のベクタなど）は失敗にしない。z3 が無ければ `(smt :status unavailable ...)`。再帰する関数は `:termination assumed`（停止性は証明しない）
 
-`run` と `bench` の既定は `--contracts auto`。実行前に VC を証明し（キャッシュ経由）、証明できた節は実行時に検査しない。`ensures` の節は、節そのものと節の式の境界・オーバーフローの VC がすべて proved なら省く。`requires` の節は、すべての呼び出し箇所で VC が proved なら省く。値として渡される関数と `main` の `requires` は常に検査する。`--no-contracts` は `--contracts off` と同じ。出力は `(contracts auto :checked 2 :erased 12 :verify-ms 1.3)`。`check` の関数ごとの行は `:level proved|runtime-checked|unspecified :clauses (requires [...] ensures [...])`
+`run` と `bench` の既定は `--contracts auto`。実行前に VC を証明し（キャッシュ経由）、証明できた節は実行時に検査しない。`ensures` の節は、節そのものと節の式の境界・オーバーフローの VC がすべて proved なら省く。`requires` の節は、すべての呼び出し箇所で VC が proved なら省く。値として渡される関数、ラムダの中で呼ばれる関数、`main` の `requires` は常に検査する。`--no-contracts` は `--contracts off` と同じ。出力は `(contracts auto :checked 2 :erased 12 :verify-ms 1.3)`。`check` の関数ごとの行は `:level proved|runtime-checked|unspecified :clauses (requires [...] ensures [...])`
 
 `spec-diff` は2つの版を節ごとに比べる（M1-7）。`:ensures` の削除・変更、`:requires` の追加・変更、`:effects` の拡大・削除、`:budget` の緩和・削除、型シグネチャの変更、関数の削除を `:verdict weakened` とし、1つでもあれば終了コード 1。本体だけの変更は `(impl (f :body changed))` に別に出す（エージェントだけでマージしてよい範囲）。z3 があれば、ensures / requires の変更について「古い requires ⇒ 新しい requires」と「古い requires ∧ 新しい ensures ⇒ 古い ensures」を証明し、示せた変更は `refined` として弱体化から外す（`--no-smt` で省略）
 
@@ -137,7 +137,7 @@ warrant spec-diff OLD NEW [--no-smt] [--timeout-ms N]
 
 ## 8. 形式検証とテスト
 
-- `formal/lean/`: 契約の省略の健全性。`verify::levels` の3条件（すべての呼び出し箇所で VC が proved、値として使われない、`main` でない）の下で、`requires` の実行時検査を外しても結果・契約違反・無応答が変わらないことを、関数値と値経由の呼び出しを持つ小さな言語のモデルで証明する（`erasure_sound`）。条件を1つ外すと結果が変わる例も載せる。VC は「解けたときの意味」で仮定し、SMT の符号化そのものの正しさは対象外
+- `formal/lean/`: 契約の省略の健全性。`verify::levels` の3条件（すべての呼び出し箇所で VC が proved、値として使われずラムダの中で呼ばれない、`main` でない）の下で、`requires` の実行時検査を外しても結果・契約違反・無応答が変わらないことを、関数値と値経由の呼び出しを持つ小さな言語のモデルで証明する（`erasure_sound`）。条件を1つ外すと結果が変わる例も載せる。VC は「解けたときの意味」で仮定し、SMT の符号化そのものの正しさは対象外
 - `formal/tla/`: 証明キャッシュ（複数プロセスの同時書き込みとハッシュ衝突）と並列 discharge（ロック付きの共有イテレータ）を TLC で検査する。どちらも、仕組みを外したモデル（その場書き込み、ロックなしの取り出し）で不変条件が破れることを負の対照として確かめる
 - `tests/soundness.rs`: ランダムな関数で、全 VC が proved なら全契約を検査して実行しても失敗しないことを確かめる差分テスト。SMT の符号化の誤りを捕まえる（割り算をユークリッド除算にした変異、i64 の上限を1ずらした変異で失敗することを確認済み）
 - `tests/properties.rs`: ランダムな正規形の Wisp・pretty 往復と、フロントエンドが panic しないこと

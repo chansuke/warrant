@@ -4,8 +4,12 @@
 `verify::levels` stops checking a function's `requires` at run time when
 
 1. every syntactic call site of the function has a proved VC,
-2. the function is never used as a value, and
+2. the function is never used as a value or called inside a lambda, and
 3. it is not `main`.
+
+The model has no lambdas, and it reads a VC as holding for every run that
+reaches its call site. In the code a VC inside a lambda holds only where the
+prover applied the lambda, which is why condition 2 also excludes those calls.
 
 This file proves that, under those three conditions, erasing the checks
 never changes what a program does: the same result, the same contract
