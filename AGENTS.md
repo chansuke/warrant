@@ -6,7 +6,7 @@ for the module layers, the invariants with the checks that hold them, and the
 commands. Read [docs/feature-map.md](docs/feature-map.md) for the names of
 features and where each one lives; use those names in commits and pull
 requests. Decisions are in the Decision Log of [docs/DESIGN.md](docs/DESIGN.md).
-The current work is [docs/HANDOFF_M2.md](docs/HANDOFF_M2.md).
+The current work is [docs/HANDOFF_M3.md](docs/HANDOFF_M3.md).
 
 The checks hold the rules. `tests/architecture.rs` checks the layers,
 `clippy.toml`, `[lints]` in `Cargo.toml` and `src/lib.rs` cover the banned
