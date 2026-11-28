@@ -6,7 +6,9 @@
 //! A `requires` clause is proved when, at every place the program calls the
 //! function, an obligation for that clause was generated and proved. A
 //! function passed around as a value has call sites no obligation can see,
-//! and `main` is called by the runtime, so their preconditions stay checked.
+//! a call inside a lambda is proved only where the prover applied the
+//! lambda, and `main` is called by the runtime, so their preconditions stay
+//! checked.
 
 use crate::ast::{Expr, ExprId, ExprKind, FnIdx, Module};
 use crate::cache::Cache;
@@ -139,23 +141,28 @@ pub fn any_failed(results: &[VcResult]) -> bool {
     results.iter().any(|r| matches!(r.status, Status::Failed { .. }))
 }
 
-/// Direct call sites of each function, and whether it is ever used as a value.
+/// Direct call sites of each function, and whether some call of it is not
+/// covered by its call site's VCs: it is used as a value, or called inside
+/// a lambda. A lambda's VCs hold only where the prover applied it, and the
+/// lambda can be passed on and called with other arguments.
 fn call_sites(m: &Module) -> (Vec<Vec<ExprId>>, Vec<bool>) {
     let mut calls = vec![Vec::new(); m.fns.len()];
-    let mut as_value = vec![false; m.fns.len()];
-    let mut stack: Vec<&Expr> = m.fns.iter().flat_map(|d| d.exprs()).collect();
-    while let Some(e) = stack.pop() {
+    let mut uncovered = vec![false; m.fns.len()];
+    let mut stack: Vec<(&Expr, bool)> = m.fns.iter().flat_map(|d| d.exprs()).map(|e| (e, false)).collect();
+    while let Some((e, in_lambda)) = stack.pop() {
         match &e.kind {
             ExprKind::Call(head, args) if matches!(head.kind, ExprKind::Global(_)) => {
                 let ExprKind::Global(f) = head.kind else { unreachable!() };
                 calls[f].push(e.id);
-                stack.extend(args);
+                uncovered[f] |= in_lambda;
+                stack.extend(args.iter().map(|a| (a, in_lambda)));
             }
-            ExprKind::Global(f) => as_value[*f] = true,
-            _ => stack.extend(e.children()),
+            ExprKind::Global(f) => uncovered[*f] = true,
+            ExprKind::Lambda(..) => stack.extend(e.children().into_iter().map(|c| (c, true))),
+            _ => stack.extend(e.children().into_iter().map(|c| (c, in_lambda))),
         }
     }
-    (calls, as_value)
+    (calls, uncovered)
 }
 
 pub fn levels(m: &Module, results: &[VcResult]) -> ClauseLevels {
@@ -170,7 +177,7 @@ pub fn levels(m: &Module, results: &[VcResult]) -> ClauseLevels {
         any
     };
     let of_fn = |f: FnIdx| results.iter().filter(move |r| r.ob.fn_name == m.fns[f].name);
-    let (calls, as_value) = call_sites(m);
+    let (calls, uncovered) = call_sites(m);
     let level = |ok: bool| if ok { Level::Proved } else { Level::RuntimeChecked };
 
     let ensures = (0..m.fns.len())
@@ -193,7 +200,7 @@ pub fn levels(m: &Module, results: &[VcResult]) -> ClauseLevels {
                     let kind = VcKind::Requires { callee: d.name.clone(), index: c };
                     let every_site = !calls[f].is_empty()
                         && calls[f].iter().all(|site| proved(&mut results.iter().filter(|r| r.ob.expr == *site && r.ob.kind == kind)));
-                    level(d.name != "main" && !as_value[f] && own_ok && every_site)
+                    level(d.name != "main" && !uncovered[f] && own_ok && every_site)
                 })
                 .collect()
         })
@@ -253,6 +260,16 @@ mod tests {
         let Some((m, l)) = levels_of(src) else { return };
         assert_eq!(names(&l.requires[m.index["pos"]]), ["runtime-checked"]);
         assert_eq!(names(&l.requires[m.index["main"]]), ["runtime-checked"]);
+    }
+
+    #[test]
+    fn a_call_inside_a_closure_keeps_the_callee_precondition() {
+        // The VC for (pos y) holds for y = 5 only; app calls g with -5.
+        let src = "(defn pos [x : i64] -> i64 (:requires (> x 0)) x)
+                   (defn app [f : (Fn [i64] i64) y : i64] -> i64 (f y))
+                   (defn main [] -> i64 (let [g (fn [y] (pos y))] (do (g 5) (app g -5))))";
+        let Some((m, l)) = levels_of(src) else { return };
+        assert_eq!(names(&l.requires[m.index["pos"]]), ["runtime-checked"]);
     }
 
     #[test]

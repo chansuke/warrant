@@ -82,6 +82,8 @@ when its code is gone or a test now catches the mistake on its own.
 - Check: Run `scripts/verify formal`. TLC checks the model, not the code: the
   cache must still write a temporary file and rename it, discharge must
   still take each obligation at most once, and `Checks` must erase only
-  proved clauses, as `Warrant.erasure_sound` assumes. If the code changes
-  one of these, change the model and keep its negative control failing.
+  proved clauses, as `Warrant.erasure_sound` assumes. The model has no
+  lambdas, so `verify::levels` must keep the `requires` of a function
+  called inside one. If the code changes one of these, change the model
+  and keep its negative control failing.
 - Incidents: `bfcfb23` (partial cache entries), `e4601bc`, `2600d3b`.
